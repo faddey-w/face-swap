@@ -1,7 +1,12 @@
 import threading
+import cv2
+import numpy as np
 from queue import Queue
 from concurrent.futures.thread import ThreadPoolExecutor
 from concurrent.futures import Future
+from types import SimpleNamespace
+from dacite import types as typing_utils
+from reface.config import Config
 
 
 class Mapper:
@@ -89,9 +94,7 @@ class AsyncMapUnordered(Mapper):
                 future = self._executor.submit(self._call_function, *args)
                 with lock:
                     n_in_progress += 1
-                future.add_done_callback(
-                    self._done_futures.put
-                )
+                future.add_done_callback(self._done_futures.put)
                 future.add_done_callback(update_in_progress)
                 del future
 
@@ -109,7 +112,7 @@ class AsyncMapUnordered(Mapper):
         return self._function(*args)
 
 
-def async_map_unordered(
+def map_fast(
     function, *iterables, size_threshold=100, num_workers=None, buffer_size=None
 ):
     need_async = True
@@ -132,3 +135,64 @@ def async_map_unordered(
 
 def _get_len(iterables):
     return min(map(len, iterables))
+
+
+def draw_bbox(image, bbox):
+    cv2.rectangle(image, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (255, 0, 255), 3)
+
+
+def load_config_from_dict(dictionary) -> Config:
+    # actually it returns SimpleNamespace, but we want to fool type hinter
+    # so it will prompt us the config fields in auto-completion
+
+    def load_from_template(template, cfg_value):
+        if isinstance(cfg_value, dict):
+            cfg_obj = SimpleNamespace()
+            for key, value in cfg_value.items():
+                nest_template = getattr(template, key, None)
+                if nest_template is not None:
+                    # it is a nested class which means subsection of config
+                    result = load_from_template(nest_template, value)
+                    setattr(cfg_obj, key, result)
+                else:
+                    # it should be either raw value or a Union
+                    anno = template.__annotations__[key]
+                    if typing_utils.is_union(anno):
+                        nest_templates = typing_utils.extract_generic(anno)
+                        result = load_from_matching_template(nest_templates, value)
+                        setattr(cfg_obj, key, result)
+                    else:
+                        setattr(cfg_obj, key, value)
+            return cfg_obj
+        elif isinstance(cfg_value, list):
+            if typing_utils.is_generic_collection(template):
+                item_template = typing_utils.extract_generic(template)[0]
+                if typing_utils.is_union(item_template):
+                    item_templates = typing_utils.extract_generic(item_template)
+                else:
+                    item_templates = [item_template]
+                return [
+                    load_from_matching_template(item_templates, item)
+                    for item in cfg_value
+                ]
+            else:
+                return cfg_value
+
+        else:
+            return cfg_value
+
+    def load_from_matching_template(templates, cfg_value):
+        for template in templates:
+            try:
+                return load_from_template(template, cfg_value)
+            except KeyError:
+                pass
+        raise KeyError("none of templates matched", templates)
+
+    # noinspection PyTypeChecker
+    return load_from_template(Config, dictionary)
+
+
+def image_from_torch(image):
+    image = image.cpu().numpy()
+    return np.transpose(image.astype("uint8"), (1, 2, 0))
