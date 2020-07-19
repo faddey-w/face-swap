@@ -16,3 +16,14 @@ class Config:
         class LOADER:
             NUM_WORKERS: int
 
+    class MODEL:
+        LR_D: float
+        LR_G: float
+        CHECKPOINT_PERIOD: int
+        CHECKPOINTS_MAX_LAST: int
+
+    class LOGGING:
+        PERIOD: float
+        VIS_PERIOD: int
+        VIS_MAX_IMAGES: int
+

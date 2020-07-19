@@ -172,11 +172,34 @@ def build_data_loader(dataset, cfg: Config, for_training: bool):
         dataset,
         num_workers=cfg.INPUT.LOADER.NUM_WORKERS,
         batch_sampler=batch_sampler,
-        collate_fn=lambda batch: [
-            (batch[i], batch[i + 1]) for i in range(0, len(batch), 2)
-        ],
+        collate_fn=_collate_batch,
     )
     return data_loader
+
+
+def _collate_batch(batch):
+    images1 = []
+    images2 = []
+    image_id_pairs = []
+    same_person = []
+    for i in range(0, len(batch), 2):
+        entry1 = batch[i]
+        entry2 = batch[i + 1]
+        images1.append(entry1['image'])
+        images2.append(entry2['image'])
+        image_id_pairs.append((entry1['id'], entry2['id']))
+        same_person.append(get_person_id(entry1['id']) == get_person_id(entry2['id']))
+
+    return {
+        "images1": torch.stack(images1, 0),
+        "images2": torch.stack(images2, 0),
+        "image_id_pairs": image_id_pairs,
+        "same_person": torch.tensor(same_person, device=env.device),
+    }
+
+
+def get_person_id(image_id):
+    return image_id.partition("/")[0]
 
 
 def preprocess_face_box(box, image_size, cfg: Config):
