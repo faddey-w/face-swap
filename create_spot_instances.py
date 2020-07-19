@@ -86,11 +86,11 @@ def main():
         subnet_id = "subnet-78543834"
 
     launch_config = {
-        "ImageId": "ami-00374daafa3bfd36d",
+        "ImageId": "ami-00217ec3a91d1093b",
         "InstanceType": opts.instance_type,
         "KeyName": "yaroslav",
         "IamInstanceProfile": {
-            "Arn": "arn:aws:iam::323917953086:instance-profile/efs_user"
+            "Arn": "arn:aws:iam::180978704935:instance-profile/ec2-instance-profile"
         },
         "BlockDeviceMappings": [
             {
@@ -98,8 +98,8 @@ def main():
                 "Ebs": {
                     "DeleteOnTermination": True,
                     "VolumeType": "gp2",
-                    "VolumeSize": 50,
-                    "SnapshotId": "snap-0c3fbbcb5e229b333",
+                    "VolumeSize": 90,
+                    "SnapshotId": "snap-0981b271672017450",
                 },
             }
         ],
