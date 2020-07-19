@@ -9,8 +9,12 @@ class AADLayer(nn.Module):
         self.c_id = c_id
         self.c_x = c_x
 
-        self.conv1 = nn.Conv2d(attr_c, c_x, kernel_size=1, stride=1, padding=0, bias=True)
-        self.conv2 = nn.Conv2d(attr_c, c_x, kernel_size=1, stride=1, padding=0, bias=True)
+        self.conv1 = nn.Conv2d(
+            attr_c, c_x, kernel_size=1, stride=1, padding=0, bias=True
+        )
+        self.conv2 = nn.Conv2d(
+            attr_c, c_x, kernel_size=1, stride=1, padding=0, bias=True
+        )
         self.fc1 = nn.Linear(c_id, c_x)
         self.fc2 = nn.Linear(c_id, c_x)
         self.norm = nn.InstanceNorm2d(c_x, affine=False)
@@ -49,12 +53,16 @@ class AAD_ResBlk(nn.Module):
         self.relu1 = nn.ReLU(inplace=True)
 
         self.AAD2 = AADLayer(cin, c_attr, c_id)
-        self.conv2 = nn.Conv2d(cin, cout, kernel_size=3, stride=1, padding=1, bias=False)
+        self.conv2 = nn.Conv2d(
+            cin, cout, kernel_size=3, stride=1, padding=1, bias=False
+        )
         self.relu2 = nn.ReLU(inplace=True)
 
         if cin != cout:
             self.AAD3 = AADLayer(cin, c_attr, c_id)
-            self.conv3 = nn.Conv2d(cin, cout, kernel_size=3, stride=1, padding=1, bias=False)
+            self.conv3 = nn.Conv2d(
+                cin, cout, kernel_size=3, stride=1, padding=1, bias=False
+            )
             self.relu3 = nn.ReLU(inplace=True)
 
     def forward(self, h, z_attr, z_id):
@@ -62,7 +70,7 @@ class AAD_ResBlk(nn.Module):
         x = self.relu1(x)
         x = self.conv1(x)
 
-        x = self.AAD2(x,z_attr, z_id)
+        x = self.AAD2(x, z_attr, z_id)
         x = self.relu2(x)
         x = self.conv2(x)
 
@@ -71,7 +79,5 @@ class AAD_ResBlk(nn.Module):
             h = self.relu3(h)
             h = self.conv3(h)
         x = x + h
-        
+
         return x
-
-
