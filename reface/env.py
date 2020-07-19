@@ -2,9 +2,12 @@ import os
 
 
 try:
-    is_cloud = os.getlogin() == "ec2-user"
+    is_aws_ec2 = os.getlogin() == "ec2-user"
+    is_colab = False
 except OSError:
-    is_cloud = True  # Colab raises error on getlogin()
+    is_colab = True  # Colab raises error on getlogin()
+    is_aws_ec2 = False
+is_cloud = is_colab or is_aws_ec2
 
 
 if is_cloud:

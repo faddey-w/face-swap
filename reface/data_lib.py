@@ -49,9 +49,21 @@ def get_array(dataset, field):
 
 def load_data(entry):
     if "image" not in entry:
-        if env.is_cloud:
+        if env.is_colab:
+            try:
+                image_pil = Image.open(entry["file"])
+            except FileNotFoundError:
+                # Colab shall cache the data on GDrive which is closer to it
+                s3_key = os.path.relpath(entry["file"], ".data")
+                buffer = _download_from_s3(s3_key)
+                os.makedirs(os.path.dirname(entry["file"]), exist_ok=True)
+                with open(entry['file'], "wb") as f:
+                    f.write(buffer)
+                image_pil = Image.open(buffer)
+        elif env.is_aws_ec2:
             s3_key = os.path.relpath(entry["file"], ".data")
-            image_pil = Image.open(_download_from_s3(s3_key))
+            buffer = _download_from_s3(s3_key)
+            image_pil = Image.open(buffer)
         else:
             image_pil = Image.open(entry["file"])
         entry["image_size"] = image_pil.size
