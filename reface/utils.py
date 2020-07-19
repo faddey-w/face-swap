@@ -1,5 +1,6 @@
 import threading
 import cv2
+import yaml
 import numpy as np
 from queue import Queue
 from concurrent.futures.thread import ThreadPoolExecutor
@@ -32,10 +33,12 @@ class AsyncMapUnordered(Mapper):
     def __init__(self, function, *iterables, num_workers=None, buffer_size=None):
         super(AsyncMapUnordered, self).__init__(function, *iterables)
         self._executor = ThreadPoolExecutor(num_workers)
-        if not buffer_size:
-            buffer_size = self._executor._max_workers * 3
+        if buffer_size:
+            self._executor._work_queue = Queue(buffer_size)
+            self._done_futures = Queue(buffer_size)
+        else:
+            self._done_futures = Queue()
         self._sender_thread = None
-        self._done_futures = Queue(buffer_size)
         self._cancelled = threading.Event()
         self._finished = False
         self._cancel_marker = object()
@@ -87,6 +90,7 @@ class AsyncMapUnordered(Mapper):
                 if all_sent and n_in_progress == 0:
                     self._done_futures.put(None)
 
+        n_total = 0
         try:
             for args in zip(*self._iterables):
                 if self._cancelled.isSet():
@@ -97,6 +101,7 @@ class AsyncMapUnordered(Mapper):
                 future.add_done_callback(self._done_futures.put)
                 future.add_done_callback(update_in_progress)
                 del future
+                n_total += 1
 
         except BaseException as exc:
             error_future = Future()
@@ -105,6 +110,8 @@ class AsyncMapUnordered(Mapper):
         finally:
             with lock:
                 all_sent = True
+                if n_total == 0:
+                    self._done_futures.put(None)
 
     def _call_function(self, *args):
         if self._cancelled.isSet():
@@ -112,7 +119,7 @@ class AsyncMapUnordered(Mapper):
         return self._function(*args)
 
 
-def map_fast(
+def map_unordered_fast(
     function, *iterables, size_threshold=100, num_workers=None, buffer_size=None
 ):
     need_async = True
@@ -133,8 +140,41 @@ def map_fast(
     return mapper
 
 
+def filter_unordered_fast(predicate, *iterables, size_threshold=100, num_workers=None, buffer_size=None):
+    return (
+        items_tuple
+        for ok, items_tuple in map_unordered_fast(
+        lambda items_tuple: (predicate(*items_tuple), items_tuple),
+        *iterables, size_threshold=size_threshold, num_workers=num_workers, buffer_size=buffer_size
+    )
+        if ok
+    )
+
+
 def _get_len(iterables):
     return min(map(len, iterables))
+
+
+def prefetch(iterable):
+    queue = Queue()
+
+    def fetcher():
+        try:
+            for item in iterable:
+                queue.put((False, item))
+        finally:
+            queue.put((True, None))
+
+    threading.Thread(target=fetcher, daemon=True).start()
+
+    def yielder():
+        while True:
+            is_end, item = queue.get()
+            if is_end:
+                return
+            yield item
+
+    return yielder()
 
 
 def draw_bbox(image, bbox):
@@ -191,6 +231,32 @@ def load_config_from_dict(dictionary) -> Config:
 
     # noinspection PyTypeChecker
     return load_from_template(Config, dictionary)
+
+
+def load_config_from_yaml_str(yaml_str):
+    return load_config_from_dict(yaml.safe_load(yaml_str))
+
+
+def load_config_from_yaml_file(filename):
+    with open(filename) as f:
+        return load_config_from_yaml_str(f.read())
+
+
+def dump_config_to_yaml(cfg, filename=None):
+    def config_to_plain_data(value):
+        if isinstance(value, SimpleNamespace):
+            return {attr: config_to_plain_data(val) for attr, val in value.__dict__.items()}
+        elif isinstance(value, (list, tuple)):
+            return value.__class__(map(config_to_plain_data, value))
+        else:
+            raise TypeError(value.__class__)
+
+    data = config_to_plain_data(cfg)
+    if filename is None:
+        return yaml.safe_dump(data)
+    else:
+        with open(filename, "w") as f:
+            yaml.safe_dump(data, f)
 
 
 def image_from_torch(image):

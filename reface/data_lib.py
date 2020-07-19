@@ -1,6 +1,8 @@
 import os
 import copy
 import csv
+import json
+import io
 from PIL import Image
 import numpy as np
 import random
@@ -8,7 +10,7 @@ import torch.utils.data
 import torch.nn
 from collections import defaultdict
 from reface.config import Config
-from reface.env import device
+from reface import env
 
 
 class Dataset:
@@ -47,16 +49,37 @@ def get_array(dataset, field):
 
 def load_data(entry):
     if "image" not in entry:
-        image_pil = Image.open(entry["file"])
+        if env.is_cloud:
+            s3_key = os.path.relpath(entry["file"], ".data")
+            image_pil = Image.open(_download_from_s3(s3_key))
+        else:
+            image_pil = Image.open(entry["file"])
         entry["image_size"] = image_pil.size
         entry["image"] = np.array(image_pil)
     return entry
 
 
-def load_image_size(entry):
-    if "image_size" not in entry:
-        entry["image_size"] = Image.open(entry["file"]).size
-    return entry
+def _download_from_s3(key):
+    if not hasattr(_download_from_s3, "s3client"):
+        import boto3
+
+        creds = json.load(open(os.path.join(env.repo_root, "reface/aws-creds.json")))
+        s3client = boto3.client(
+            "s3",
+            aws_access_key_id=creds["access_token"],
+            aws_secret_access_key=creds["secret_token"],
+            region_name=creds["region"],
+        )
+        bucket = creds["bucket_name"]
+        _download_from_s3.s3client = s3client
+        _download_from_s3.bucket = bucket
+    else:
+        s3client = _download_from_s3.s3client
+        bucket = _download_from_s3.bucket
+
+    buffer = io.BytesIO()
+    s3client.download_fileobj(bucket, key, buffer)
+    return buffer
 
 
 class MappedDataset:
@@ -118,7 +141,7 @@ class TrainSampler(torch.utils.data.Sampler):
 
 def build_data_loader(dataset, cfg: Config, for_training: bool):
     plain_dataset = dataset
-    dataset = MappedDataset(dataset, cfg, device)
+    dataset = MappedDataset(dataset, cfg, env.device)
 
     if for_training:
         sampler = TrainSampler(plain_dataset, cfg)
@@ -175,7 +198,7 @@ class InputLayer(torch.nn.Module):
         image = image.to(dtype=torch.float32)
 
         # TODO: consider normalizing it to unit-normal
-        image = image / 255.
+        image = image / 255.0
 
         image = image.unsqueeze(0)
         image = torch.nn.functional.interpolate(

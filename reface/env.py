@@ -2,14 +2,15 @@ import os
 
 
 try:
-    os.getlogin()
+    is_cloud = os.getlogin() == "ec2-user"
 except OSError:
-    is_colab = True
-else:
-    is_colab = False
+    is_cloud = True  # Colab raises error on getlogin()
 
 
-if is_colab:
+if is_cloud:
     device = "cuda"
 else:
     device = "cpu"
+
+
+repo_root = os.path.dirname(os.path.dirname(__file__))
