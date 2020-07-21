@@ -90,8 +90,10 @@ class AADGenerator(nn.Module):
     def __init__(self, cfg: Config):
         super(AADGenerator, self).__init__()
         c_id = face_recognizer.FaceRecognizer.embedding_dimension
+
+        up1_size = cfg.INPUT.IMAGE_SIZE // (2 ** len(cfg.GENERATOR.DIMS))
         self.up1 = nn.ConvTranspose2d(
-            c_id, cfg.GENERATOR.DIMS[-1], kernel_size=2, stride=1, padding=0
+            c_id, cfg.GENERATOR.DIMS[-1], kernel_size=up1_size, stride=1, padding=0
         )
         dims = cfg.GENERATOR.DIMS[::-1]
         self.aad_blocks = nn.ModuleList([AAD_ResBlk(dims[0], dims[0], dims[0], c_id)])

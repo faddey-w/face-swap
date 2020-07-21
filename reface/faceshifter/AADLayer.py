@@ -43,7 +43,7 @@ class AADLayer(nn.Module):
 
 
 class AAD_ResBlk(nn.Module):
-    def __init__(self, cin, cout, c_attr, c_id=256):
+    def __init__(self, cin, cout, c_attr, c_id):
         super(AAD_ResBlk, self).__init__()
         self.cin = cin
         self.cout = cout

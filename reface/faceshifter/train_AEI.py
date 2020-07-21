@@ -209,10 +209,10 @@ class Trainer:
                 )
                 * same_person
             ) / (same_person.sum() + 1e-6)
-            self._metrics.log(loss_g_rec=loss_g_rec.item())
+            self._metrics.log(loss_g_rec=float(loss_g_rec))
 
             loss_g = 1 * loss_g_adv + 10 * loss_g_attr + 5 * loss_g_id + 10 * loss_g_rec
-            self._metrics.log(loss_g_rec=loss_g_rec.item())
+            self._metrics.log(loss_g=float(loss_g))
             loss_g.backward()
             self.opt_g.step()
 
@@ -275,7 +275,10 @@ class Trainer:
         img_target = get_grid_image(img_target)
         img_result = get_grid_image(img_result)
         vis_result = torch.cat((img_source, img_result, img_target), dim=2)
-        return vis_result.numpy()[::-1, :, :]
+        vis_result = 255 * ((vis_result + 1) / 2)
+        vis_result = vis_result.numpy().astype("uint8")
+        vis_result = np.transpose(vis_result, (1, 2, 0))
+        return vis_result
 
 
 @dataclass

@@ -128,7 +128,7 @@ class TrainSampler(torch.utils.data.Sampler):
         while True:
             if self.state_counter < self.n_same_person_pairs:
                 pers_id = self.rng.choice(self.persons)
-                i1, i2 = self.rng.choices(self.indices_per_person[pers_id], k=2)
+                i1, i2 = self.rng.sample(self.indices_per_person[pers_id], k=2)
             else:
                 pers1_id, pers2_id = self.rng.sample(self.persons, 2)
                 i1 = self.rng.choice(self.indices_per_person[pers1_id])

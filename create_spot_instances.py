@@ -88,7 +88,7 @@ def main():
     launch_config = {
         "ImageId": "ami-00217ec3a91d1093b",
         "InstanceType": opts.instance_type,
-        "KeyName": "yaroslav",
+        "KeyName": "spotinst",
         "IamInstanceProfile": {
             "Arn": "arn:aws:iam::180978704935:instance-profile/ec2-instance-profile"
         },
