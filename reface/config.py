@@ -7,6 +7,7 @@ class Config:
     class INPUT:
         FACE_BOX_EXTENSION_FACTOR: float
         IMAGE_SIZE: int
+        N_CHANNELS: int
 
         class TRAIN:
             # this is amount of *pairs*, not individual images per batch
@@ -16,14 +17,27 @@ class Config:
         class LOADER:
             NUM_WORKERS: int
 
-    class MODEL:
-        LR_D: float
-        LR_G: float
+    class GENERATOR:
+        DIMS: list
+
+        LR: float
+
+    class DISCRIMINATOR:
+        CONV_SIZE: int
+        N_SCALES: int
+        N_LAYERS: int
+        BASE_DIM: int
+        MAX_DIM: int
+        NORM_LAYER: str
+        USE_SIGMOID: bool
+        LEAKY_RELU_SLOPE: float
+
+        LR: float
+
+    class TRAINING:
         CHECKPOINT_PERIOD: int
         CHECKPOINTS_MAX_LAST: int
-
-    class LOGGING:
-        PERIOD: float
+        LOG_PERIOD: float
         VIS_PERIOD: int
         VIS_MAX_IMAGES: int
 

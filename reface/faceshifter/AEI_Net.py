@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from reface import utils, face_recognizer
+from reface.config import Config
 from .AADLayer import AAD_ResBlk
 
 
@@ -44,129 +46,81 @@ class deconv4x4(nn.Module):
         self.bn = norm(out_c)
         self.lrelu = nn.LeakyReLU(0.1, inplace=True)
 
-    def forward(self, input, skip):
-        x = self.deconv(input)
+    def forward(self, image, skip):
+        x = self.deconv(image)
         x = self.bn(x)
         x = self.lrelu(x)
         return torch.cat((x, skip), dim=1)
 
 
 class MLAttrEncoder(nn.Module):
-    def __init__(self):
+    def __init__(self, cfg: Config):
         super(MLAttrEncoder, self).__init__()
-        self.conv1 = conv4x4(3, 32)
-        self.conv2 = conv4x4(32, 64)
-        self.conv3 = conv4x4(64, 128)
-        self.conv4 = conv4x4(128, 256)
-        self.conv5 = conv4x4(256, 512)
-        self.conv6 = conv4x4(512, 1024)
-        self.conv7 = conv4x4(1024, 1024)
-
-        self.deconv1 = deconv4x4(1024, 1024)
-        self.deconv2 = deconv4x4(2048, 512)
-        self.deconv3 = deconv4x4(1024, 256)
-        self.deconv4 = deconv4x4(512, 128)
-        self.deconv5 = deconv4x4(256, 64)
-        self.deconv6 = deconv4x4(128, 32)
+        first_dim = cfg.GENERATOR.DIMS[0]
+        out_dims = cfg.GENERATOR.DIMS[1:]
+        self.conv0 = conv4x4(cfg.INPUT.N_CHANNELS, first_dim)
+        conv_stack = []
+        deconv_stack = []
+        for i, out_dim in enumerate(out_dims, 1):
+            in_dim = cfg.GENERATOR.DIMS[i - 1]
+            is_not_innermost = i != len(out_dims)
+            conv_stack.append(conv4x4(in_dim, out_dim))
+            deconv_stack.append(deconv4x4((1 + is_not_innermost) * out_dim, in_dim))
+        self.conv_stack = nn.ModuleList(conv_stack)
+        self.deconv_stack = nn.ModuleList(deconv_stack[::-1])
 
         self.apply(weight_init)
 
-    def forward(self, Xt):
-        feat1 = self.conv1(Xt)
-        # 32x128x128
-        feat2 = self.conv2(feat1)
-        # 64x64x64
-        feat3 = self.conv3(feat2)
-        # 128x32x32
-        feat4 = self.conv4(feat3)
-        # 256x16xx16
-        feat5 = self.conv5(feat4)
-        # 512x8x8
-        feat6 = self.conv6(feat5)
-        # 1024x4x4
-        z_attr1 = self.conv7(feat6)
-        # 1024x2x2
-
-        z_attr2 = self.deconv1(z_attr1, feat6)
-        z_attr3 = self.deconv2(z_attr2, feat5)
-        z_attr4 = self.deconv3(z_attr3, feat4)
-        z_attr5 = self.deconv4(z_attr4, feat3)
-        z_attr6 = self.deconv5(z_attr5, feat2)
-        z_attr7 = self.deconv6(z_attr6, feat1)
-        z_attr8 = F.interpolate(
-            z_attr7, scale_factor=2, mode="bilinear", align_corners=True
+    def forward(self, img_target):
+        feats = [self.conv0(img_target)]
+        for conv in self.conv_stack:
+            feats.append(conv(feats[-1]))
+        z_attrs = [feats.pop(-1)]
+        for deconv in self.deconv_stack:
+            z_attrs.append(deconv(z_attrs[-1], feats.pop(-1)))
+        z_attrs.append(
+            F.interpolate(
+                z_attrs[-1], scale_factor=2, mode="bilinear", align_corners=True
+            )
         )
-        return z_attr1, z_attr2, z_attr3, z_attr4, z_attr5, z_attr6, z_attr7, z_attr8
+        return z_attrs
 
 
 class AADGenerator(nn.Module):
-    def __init__(self, c_id=256):
+    def __init__(self, cfg: Config):
         super(AADGenerator, self).__init__()
-        self.up1 = nn.ConvTranspose2d(c_id, 1024, kernel_size=2, stride=1, padding=0)
-        self.AADBlk1 = AAD_ResBlk(1024, 1024, 1024, c_id)
-        self.AADBlk2 = AAD_ResBlk(1024, 1024, 2048, c_id)
-        self.AADBlk3 = AAD_ResBlk(1024, 1024, 1024, c_id)
-        self.AADBlk4 = AAD_ResBlk(1024, 512, 512, c_id)
-        self.AADBlk5 = AAD_ResBlk(512, 256, 256, c_id)
-        self.AADBlk6 = AAD_ResBlk(256, 128, 128, c_id)
-        self.AADBlk7 = AAD_ResBlk(128, 64, 64, c_id)
-        self.AADBlk8 = AAD_ResBlk(64, 3, 64, c_id)
-
+        c_id = face_recognizer.FaceRecognizer.embedding_dimension
+        self.up1 = nn.ConvTranspose2d(
+            c_id, cfg.GENERATOR.DIMS[-1], kernel_size=2, stride=1, padding=0
+        )
+        dims = cfg.GENERATOR.DIMS[::-1]
+        self.aad_blocks = nn.ModuleList([AAD_ResBlk(dims[0], dims[0], dims[0], c_id)])
+        last_cout = dims[0]
+        for i in range(len(dims) - 1):
+            cin, cout, c_attr = last_cout, dims[i], 2 * dims[i + 1]
+            self.aad_blocks += [AAD_ResBlk(cin, cout, c_attr, c_id)]
+            last_cout = cout
+        self.last_aad_block = AAD_ResBlk(last_cout, 3, 2 * dims[-1], c_id)
         self.apply(weight_init)
 
-    def forward(self, z_attr, z_id):
+    def forward(self, z_attrs, z_id):
         m = self.up1(z_id.reshape(z_id.shape[0], -1, 1, 1))
-        m2 = F.interpolate(
-            self.AADBlk1(m, z_attr[0], z_id),
-            scale_factor=2,
-            mode="bilinear",
-            align_corners=True,
-        )
-        m3 = F.interpolate(
-            self.AADBlk2(m2, z_attr[1], z_id),
-            scale_factor=2,
-            mode="bilinear",
-            align_corners=True,
-        )
-        m4 = F.interpolate(
-            self.AADBlk3(m3, z_attr[2], z_id),
-            scale_factor=2,
-            mode="bilinear",
-            align_corners=True,
-        )
-        m5 = F.interpolate(
-            self.AADBlk4(m4, z_attr[3], z_id),
-            scale_factor=2,
-            mode="bilinear",
-            align_corners=True,
-        )
-        m6 = F.interpolate(
-            self.AADBlk5(m5, z_attr[4], z_id),
-            scale_factor=2,
-            mode="bilinear",
-            align_corners=True,
-        )
-        m7 = F.interpolate(
-            self.AADBlk6(m6, z_attr[5], z_id),
-            scale_factor=2,
-            mode="bilinear",
-            align_corners=True,
-        )
-        m8 = F.interpolate(
-            self.AADBlk7(m7, z_attr[6], z_id),
-            scale_factor=2,
-            mode="bilinear",
-            align_corners=True,
-        )
-        y = self.AADBlk8(m8, z_attr[7], z_id)
+        for add_block, z_attr in zip(self.aad_blocks, z_attrs):
+            m = F.interpolate(
+                add_block(m, z_attr, z_id),
+                scale_factor=2,
+                mode="bilinear",
+                align_corners=True,
+            )
+        y = self.last_aad_block(m, z_attrs[-1], z_id)
         return torch.tanh(y)
 
 
 class AEI_Net(nn.Module):
-    def __init__(self, c_id=256):
+    def __init__(self, cfg):
         super(AEI_Net, self).__init__()
-        self.encoder = MLAttrEncoder()
-        self.generator = AADGenerator(c_id)
+        self.encoder = MLAttrEncoder(cfg)
+        self.generator = AADGenerator(cfg)
 
     def forward(self, Xt, z_id):
         attr = self.encoder(Xt)
@@ -174,5 +128,4 @@ class AEI_Net(nn.Module):
         return Y, attr
 
     def get_attr(self, X):
-        # with torch.no_grad():
         return self.encoder(X)

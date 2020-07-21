@@ -1,16 +1,17 @@
 import os
 import copy
 import csv
-import json
 import io
+import logging
 from PIL import Image
 import numpy as np
 import random
+import bisect
 import torch.utils.data
 import torch.nn
 from collections import defaultdict
 from reface.config import Config
-from reface import env
+from reface import env, s3_utils
 
 
 class Dataset:
@@ -47,51 +48,31 @@ def get_array(dataset, field):
     return np.array([entry[field] for entry in dataset])
 
 
-def load_data(entry):
+def load_image_data(entry):
     if "image" not in entry:
         if env.is_colab:
             try:
                 image_pil = Image.open(entry["file"])
-            except FileNotFoundError:
+            except (FileNotFoundError, Image.UnidentifiedImageError):
                 # Colab shall cache the data on GDrive which is closer to it
+                _log.debug("Loading from S3: %s", entry["file"])
                 s3_key = os.path.relpath(entry["file"], ".data")
-                buffer = _download_from_s3(s3_key)
+                buffer = io.BytesIO()
+                s3_utils.get_s3_client().download_fileobj(s3_utils.bucket, s3_key, buffer)
                 os.makedirs(os.path.dirname(entry["file"]), exist_ok=True)
                 with open(entry['file'], "wb") as f:
-                    f.write(buffer)
+                    f.write(buffer.getvalue())
                 image_pil = Image.open(buffer)
         elif env.is_aws_ec2:
             s3_key = os.path.relpath(entry["file"], ".data")
-            buffer = _download_from_s3(s3_key)
+            buffer = io.BytesIO()
+            s3_utils.get_s3_client().download_fileobj(s3_utils.bucket, s3_key, buffer)
             image_pil = Image.open(buffer)
         else:
             image_pil = Image.open(entry["file"])
         entry["image_size"] = image_pil.size
         entry["image"] = np.array(image_pil)
     return entry
-
-
-def _download_from_s3(key):
-    if not hasattr(_download_from_s3, "s3client"):
-        import boto3
-
-        creds = json.load(open(os.path.join(env.repo_root, "reface/aws-creds.json")))
-        s3client = boto3.client(
-            "s3",
-            aws_access_key_id=creds["access_token"],
-            aws_secret_access_key=creds["secret_token"],
-            region_name=creds["region"],
-        )
-        bucket = creds["bucket_name"]
-        _download_from_s3.s3client = s3client
-        _download_from_s3.bucket = bucket
-    else:
-        s3client = _download_from_s3.s3client
-        bucket = _download_from_s3.bucket
-
-    buffer = io.BytesIO()
-    s3client.download_fileobj(bucket, key, buffer)
-    return buffer
 
 
 class MappedDataset:
@@ -104,7 +85,11 @@ class MappedDataset:
         assert isinstance(item, int)
         entry = self.dataset[item]
         entry = copy.deepcopy(entry)
-        load_data(entry)
+        try:
+            load_image_data(entry)
+        except (FileNotFoundError, Image.UnidentifiedImageError):
+            entry["image"] = None
+            return entry
         full_image = entry["image"]
 
         box = preprocess_face_box(entry["box"], entry["image_size"], self.cfg)
@@ -129,12 +114,15 @@ class TrainSampler(torch.utils.data.Sampler):
         assert self.n_same_person_pairs <= self.batch_size
         self.state_counter = 0
         indices_per_person = defaultdict(list)
+        self.image_id_to_index = {}
         for i, entry in enumerate(dataset):
             pers_id = entry["id"].partition("/")[0]
             indices_per_person[pers_id].append(i)
+            self.image_id_to_index[entry["id"]] = i
         self.indices_per_person = dict(indices_per_person)
         self.persons = list(self.indices_per_person.keys())
         self.size = len(dataset)
+        self.total_failed_entries = 0
 
     def __iter__(self):
         while True:
@@ -149,6 +137,16 @@ class TrainSampler(torch.utils.data.Sampler):
             yield i2
             self.state_counter += 1
             self.state_counter %= self.batch_size
+
+    def disable_failed_entries(self, image_ids):
+        for image_id in image_ids:
+            person_id = get_person_id(image_id)
+            index = self.image_id_to_index[image_id]
+            person_indices = self.indices_per_person[person_id]
+            pos = bisect.bisect(person_indices, index)
+            if 0 <= pos < len(person_indices) and person_indices[pos] == index:
+                del person_indices[pos]
+                self.total_failed_entries += 1
 
 
 def build_data_loader(dataset, cfg: Config, for_training: bool):
@@ -173,6 +171,7 @@ def build_data_loader(dataset, cfg: Config, for_training: bool):
         num_workers=cfg.INPUT.LOADER.NUM_WORKERS,
         batch_sampler=batch_sampler,
         collate_fn=_collate_batch,
+        pin_memory=env.device == "cuda",
     )
     return data_loader
 
@@ -182,9 +181,17 @@ def _collate_batch(batch):
     images2 = []
     image_id_pairs = []
     same_person = []
-    for i in range(0, len(batch), 2):
-        entry1 = batch[i]
-        entry2 = batch[i + 1]
+    # skip entries where we failed to load the image
+    failed_image_ids = []
+    clean_batch = []
+    for entry in batch:
+        if entry['image'] is not None:
+            clean_batch.append(entry)
+        else:
+            failed_image_ids.append(entry['id'])
+    for i in range(1, len(clean_batch), 2):
+        entry1 = clean_batch[i - 1]
+        entry2 = clean_batch[i]
         images1.append(entry1['image'])
         images2.append(entry2['image'])
         image_id_pairs.append((entry1['id'], entry2['id']))
@@ -195,6 +202,7 @@ def _collate_batch(batch):
         "images2": torch.stack(images2, 0),
         "image_id_pairs": image_id_pairs,
         "same_person": torch.tensor(same_person, device=env.device),
+        "failed_image_ids": failed_image_ids,
     }
 
 
@@ -232,8 +240,7 @@ class InputLayer(torch.nn.Module):
         image = image.permute([2, 0, 1])  # HWC->CHW
         image = image.to(dtype=torch.float32)
 
-        # TODO: consider normalizing it to unit-normal
-        image = image / 255.0
+        image = 2 * (image / 255.0) - 1
 
         image = image.unsqueeze(0)
         image = torch.nn.functional.interpolate(
@@ -275,3 +282,6 @@ def box_intersection(box1_xyxy, box2_xyxy):
         min(box1_xyxy[2], box2_xyxy[2]),
         min(box1_xyxy[3], box2_xyxy[3]),
     )
+
+
+_log = logging.getLogger(__name__)

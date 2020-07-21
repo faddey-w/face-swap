@@ -1,13 +1,9 @@
 import os
 import argparse
 import tqdm
-import boto3
 import botocore.exceptions
 from reface.utils import map_unordered_fast, prefetch
-
-BUCKET = "data-for-refaceai-test"
-boto3.setup_default_session(profile_name="reface")
-s3_client = boto3.client("s3")
+from reface import s3_utils
 
 
 def iter_files(split_name):
@@ -18,7 +14,9 @@ def iter_files(split_name):
 
 def check_if_not_uploaded(local_path):
     try:
-        s3_client.head_object(Bucket=BUCKET, Key=local_path_to_s3_key(local_path))
+        s3_utils.get_s3_client().head_object(
+            Bucket=s3_utils.bucket, Key=local_path_to_s3_key(local_path)
+        )
     except botocore.exceptions.ClientError:
         return True
     else:
@@ -27,8 +25,10 @@ def check_if_not_uploaded(local_path):
 
 def upload(local_path, check):
     if not check or check_if_not_uploaded(local_path):
-        s3_client.upload_file(
-            Bucket=BUCKET, Key=local_path_to_s3_key(local_path), Filename=local_path
+        s3_utils.get_s3_client().upload_file(
+            Bucket=s3_utils.bucket,
+            Key=local_path_to_s3_key(local_path),
+            Filename=local_path,
         )
     return local_path
 

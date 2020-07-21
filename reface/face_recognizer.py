@@ -5,7 +5,7 @@ from facenet_pytorch import InceptionResnetV1
 
 class FaceRecognizer:
     embedding_dimension = 512
-    best_input_size = 112, 112
+    best_input_size = 256, 256
 
     def __init__(self):
         self.recognizer = InceptionResnetV1(pretrained="vggface2", device=env.device)
@@ -17,4 +17,4 @@ class FaceRecognizer:
             image = nn.functional.interpolate(
                 image, self.best_input_size, mode="bilinear", align_corners=True
             )
-        return self.recognizer(image)
+        return self.recognizer((image + 1) / 2.)

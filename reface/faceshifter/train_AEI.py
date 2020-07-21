@@ -2,16 +2,13 @@ from reface.faceshifter.AEI_Net import AEI_Net
 from reface.faceshifter.MultiscaleDiscriminator import MultiscaleDiscriminator
 import torch.optim as optim
 from reface.face_recognizer import FaceRecognizer
-import torch.nn.functional as F
 import torch
 import time
 import torchvision
-import cv2
+import numpy as np
 import os
 import itertools
 import threading
-from queue import Queue, Empty
-from typing import Optional
 import datetime
 from collections import defaultdict
 from dataclasses import dataclass
@@ -25,19 +22,18 @@ class ModelManager:
         self.model_dir = model_dir
         self.cfg = utils.load_config_from_yaml_file(self._get_config_path(model_dir))
 
+    # noinspection PyUnresolvedReferences
     def build_model(self):
-        generator = AEI_Net(c_id=512).to(env.device)
-        discriminator = MultiscaleDiscriminator(
-            input_nc=3, n_layers=6, norm_layer=torch.nn.InstanceNorm2d
-        ).to(env.device)
+        generator = AEI_Net(self.cfg).to(env.device)
+        discriminator = MultiscaleDiscriminator(self.cfg).to(env.device)
         return generator, discriminator
 
     def build_optimizer(self, generator, discriminator):
         opt_g = optim.Adam(
-            generator.parameters(), lr=self.cfg.MODEL.LR_G, betas=(0, 0.999)
+            generator.parameters(), lr=self.cfg.GENERATOR.LR, betas=(0, 0.999)
         )
         opt_d = optim.Adam(
-            discriminator.parameters(), lr=self.cfg.MODEL.LR_D, betas=(0, 0.999)
+            discriminator.parameters(), lr=self.cfg.DISCRIMINATOR.LR, betas=(0, 0.999)
         )
         return opt_g, opt_d
 
@@ -46,10 +42,12 @@ class ModelManager:
             for layer in model.modules():
                 if isinstance(layer, (torch.nn.Conv2d, torch.nn.ConvTranspose2d)):
                     torch.nn.init.xavier_normal_(layer.weight)
-                    torch.nn.init.constant_(layer.bias, 0)
+                    if layer.bias is not None:
+                        torch.nn.init.constant_(layer.bias, 0)
                 if isinstance(layer, torch.nn.Linear):
                     torch.nn.init.normal_(layer.weight, 0, 0.001)
-                    torch.nn.init.constant_(layer.bias, 0)
+                    if layer.bias is not None:
+                        torch.nn.init.constant_(layer.bias, 0)
 
     def has_checkpoint(self) -> bool:
         return len(self._list_checkpoint_paths()) > 0
@@ -98,7 +96,7 @@ class ModelManager:
 class Trainer:
     def __init__(self, model_manager: ModelManager, dataset: data_lib.Dataset):
         self.model_manager = model_manager
-        self.cfg = model_manager.cfg
+        self.cfg: Config = model_manager.cfg
         self.dataset = dataset
         self.face_recognizer = FaceRecognizer()
         self.dataloader = data_lib.build_data_loader(
@@ -118,37 +116,26 @@ class Trainer:
         else:
             self.model_manager.init_model(self.generator, self.discriminator)
             self.start_it = 0
-        self.metrics = MetricsAccumulator("2.3f", self.start_it)
+        self._metrics = MetricsAccumulator("2.3f", self.start_it)
 
         self._summary_writer = SummaryWriter(self.model_manager.model_dir)
-        self._last_metrics_q = Queue()
+        self._log_file = open(os.path.join(model_manager.model_dir, "log.txt"), "a")
 
-        self._train_thread = None
         self._train_stop_requested = threading.Event()
 
-    def start_train(self):
-        self._train_stop_requested.clear()
-        self._train_thread = threading.Thread(target=self._train_main)
-        self._train_thread.start()
-
-    def stop_train(self, wait=True):
+    def stop_train(self):
         self._train_stop_requested.set()
-        if wait:
-            self._train_thread.join()
-            self._train_thread = None
 
-    def stream_train_log(self, timeout=180):
-        while True:
-            it, metrics, metrics_fmt = self._last_metrics_q.get(timeout=timeout)
-            now = datetime.datetime.now().time().isoformat()
-            message = f"{now} | {it}: " + " ".join(
-                f"{key}={valstr}" for key, valstr in metrics_fmt.items()
-            )
-            vis_it, vis_img = self.metrics.get_last_visualization()
-            yield it, metrics, message, vis_it, vis_img
+    def train(self):
+        try:
+            yield from self._train_loop()
+        finally:
+            self._log_file.flush()
 
-    # noinspection PyTypeChecker,PyUnresolvedReferences
-    def _train_main(self):
+    def train_in_background(self):
+        return utils.prefetch(self.train(), 100)
+
+    def _train_loop(self):
         batch_size = self.cfg.INPUT.TRAIN.BATCH_SIZE
 
         self.generator.train()
@@ -160,12 +147,23 @@ class Trainer:
             else:
                 return torch.relu(X + 1).mean()
 
+        self._metrics.log(data_failures=0)
+
         for self.it in itertools.count(self.start_it):
             if self._train_stop_requested.isSet():
                 break
             step_start_time = time.time()
             data = next(self.data_gen)
-            self.metrics.log(data_time=time.time() - step_start_time)
+
+            if data["failed_image_ids"]:
+                sampler = self.dataloader.batch_sampler.sampler
+                sampler.disable_failed_entries(data["failed_image_ids"])
+                self._metrics.log(
+                    data_failures=sampler.total_failed_entries
+                    / ((self.it + 1) * batch_size)
+                )
+
+            self._metrics.log(data_time=time.time() - step_start_time)
 
             img_source = data["images1"]
             img_target = data["images2"]
@@ -181,14 +179,16 @@ class Trainer:
             loss_g_adv = 0
             for di in avd_discr_scores:
                 loss_g_adv += hinge_loss(di[0], True)
-            self.metrics.log(loss_g_adv=loss_g_adv.item())
+            self._metrics.log(loss_g_adv=float(loss_g_adv))
 
-            face_embed_result = self.face_recognizer(img_source)
+            face_embed_result = self.face_recognizer(img_result)
 
+            # noinspection PyTypeChecker,PyUnresolvedReferences
             loss_g_id = (
                 1 - torch.cosine_similarity(face_embed_orig, face_embed_result, dim=1)
             ).mean()
-            self.metrics.log(loss_g_id=loss_g_id.item())
+
+            self._metrics.log(loss_g_id=float(loss_g_id))
 
             result_attrs = self.generator.get_attr(img_result)
             loss_g_attr = 0
@@ -200,7 +200,7 @@ class Trainer:
                     dim=1,
                 ).mean()
             loss_g_attr /= 2.0
-            self.metrics.log(loss_g_attr=loss_g_attr.item())
+            self._metrics.log(loss_g_attr=float(loss_g_attr))
 
             loss_g_rec = torch.sum(
                 0.5
@@ -209,12 +209,12 @@ class Trainer:
                 )
                 * same_person
             ) / (same_person.sum() + 1e-6)
-            self.metrics.log(loss_g_rec=loss_g_rec.item())
+            self._metrics.log(loss_g_rec=loss_g_rec.item())
 
             loss_g = 1 * loss_g_adv + 10 * loss_g_attr + 5 * loss_g_id + 10 * loss_g_rec
-            self.metrics.log(loss_g_rec=loss_g_rec.item())
+            self._metrics.log(loss_g_rec=loss_g_rec.item())
             loss_g.backward()
-            self.opt_g.it()
+            self.opt_g.step()
 
             # train D
             self.opt_d.zero_grad()
@@ -222,59 +222,79 @@ class Trainer:
             loss_d_fake = 0
             for di in fake_discr_scores:
                 loss_d_fake += hinge_loss(di[0], False)
-            self.metrics.log(loss_d_fake=loss_d_fake.item())
+            self._metrics.log(loss_d_fake=float(loss_d_fake))
 
             true_discr_scores = self.discriminator(img_source)
             loss_d_true = 0
             for di in true_discr_scores:
                 loss_d_true += hinge_loss(di[0], True)
-            self.metrics.log(loss_d_true=loss_d_true.item())
+            self._metrics.log(loss_d_true=float(loss_d_true))
 
-            loss_d = 0.5 * (loss_d_true.mean() + loss_d_fake.mean())
-            self.metrics.log(loss_d=loss_d.item())
+            # noinspection PyTypeChecker
+            loss_d = 0.5 * (torch.mean(loss_d_true) + torch.mean(loss_d_fake))
+            self._metrics.log(loss_d=loss_d.item())
 
             loss_d.backward()
             self.opt_d.step()
 
-            self.metrics.log(step_time=time.time() - step_start_time)
+            self._metrics.log(step_time=time.time() - step_start_time)
 
             if torch.cuda.is_available():
                 max_mem_mb = torch.cuda.max_memory_allocated() / 1024.0 / 1024.0
-                self.metrics.log(gpu_mem=max_mem_mb, fmt=".0f")
+                self._metrics.log(gpu_mem=max_mem_mb, fmt=".0f")
 
-            self.metrics.set_iteration(self.it)
+            self._metrics.set_iteration(self.it)
 
-            if (self.it + 1) % self.cfg.LOGGING.VIS_PERIOD_STEP == 0:
-                self.metrics.log_visualization(
-                    self._make_visualization(img_source, img_target, img_result)
+            if (self.it + 1) % self.cfg.TRAINING.VIS_PERIOD == 0:
+                yield VisualizationEvent(
+                    self.it,
+                    self._make_visualization(img_source, img_target, img_result),
                 )
-            if (self.it + 1) % self.cfg.LOGGING.PERIOD == 0:
-                it, metrics, metrics_formatted = self.metrics.get_values(True)
-                for key, val in metrics.items():
-                    self._summary_writer.add_scalar(key, val, it)
-                try:
-                    while True:
-                        self._last_metrics_q.get_nowait()
-                except Empty:
-                    pass
-                self._last_metrics_q.put((it, metrics, metrics_formatted))
-
-            if (self.it + 1) % self.cfg.MODEL.CHECKPOINT_PERIOD == 0:
+            if (self.it + 1) % self.cfg.TRAINING.CHECKPOINT_PERIOD == 0:
                 self.model_manager.save_checkpoint(
                     self.generator, self.discriminator, self.opt_g, self.opt_d, self.it
                 )
+            if (self.it + 1) % self.cfg.TRAINING.LOG_PERIOD == 0:
+                it, metrics, metrics_formatted = self._metrics.get_values(True)
+                for key, val in metrics.items():
+                    self._summary_writer.add_scalar(key, val, it)
+                now = datetime.datetime.now().time().isoformat()
+                message = f"{now} | {it}: " + " ".join(
+                    f"{key}={valstr}" for key, valstr in metrics_formatted.items()
+                )
+                print(message, file=self._log_file)
+                yield MetricsEvent(it, metrics, message)
 
     def _make_visualization(self, img_source, img_target, img_result):
         def get_grid_image(img):
-            img = img[: self.cfg.LOGGING.VIS_MAX_IMAGES]
+            img = img[: self.cfg.TRAINING.VIS_MAX_IMAGES]
             img = torchvision.utils.make_grid(img.detach().cpu(), nrow=1)
             return img
 
         img_source = get_grid_image(img_source)
         img_target = get_grid_image(img_target)
         img_result = get_grid_image(img_result)
-        vis_result = torch.cat((img_source, img_result, img_target), dim=2)[::-1, :, :]
-        return vis_result.numpy()
+        vis_result = torch.cat((img_source, img_result, img_target), dim=2)
+        return vis_result.numpy()[::-1, :, :]
+
+
+@dataclass
+class MetricsEvent:
+    it: int
+    metrics: dict
+    message: str
+
+    is_metrics = True
+    is_visualization = False
+
+
+@dataclass
+class VisualizationEvent:
+    it: int
+    image: np.ndarray
+
+    is_metrics = False
+    is_visualization = True
 
 
 class MetricsAccumulator:
@@ -284,26 +304,19 @@ class MetricsAccumulator:
         self._amounts = defaultdict(int)
         self._formats = {}
         self._lock = threading.Lock()
-        self._last_visualization = None
-        self._last_visualization_it = None
         self._it = start_it
 
     def log(self, *, fmt=None, **keys_values):
         with self._lock:
             for key, val in keys_values.items():
                 self._sums[key] += val
-                self._amounts += 1
+                self._amounts[key] += 1
                 if fmt is not None:
                     self._formats[key] = fmt
 
     def set_iteration(self, it):
         with self._lock:
             self._it = it
-
-    def log_visualization(self, image):
-        with self._lock:
-            self._last_visualization = image
-            self._last_visualization_it = self._it
 
     def get_values(self, with_formatted=False, reset=True):
         result = {}
@@ -326,12 +339,3 @@ class MetricsAccumulator:
             return it, result, formatted
         else:
             return it, result
-
-    def get_last_visualization(self, reset=True):
-        with self._lock:
-            image = self._last_visualization
-            if reset:
-                self._last_visualization = None
-            it = self._last_visualization_it
-
-        return it, image

@@ -1,6 +1,7 @@
 import threading
 import cv2
 import yaml
+import sys
 import numpy as np
 from queue import Queue
 from concurrent.futures.thread import ThreadPoolExecutor
@@ -155,14 +156,19 @@ def _get_len(iterables):
     return min(map(len, iterables))
 
 
-def prefetch(iterable):
-    queue = Queue()
+def prefetch(iterable, buffer_size=None):
+    if buffer_size is None:
+        queue = Queue()
+    else:
+        queue = Queue(buffer_size)
 
     def fetcher():
         try:
             for item in iterable:
                 queue.put((False, item))
-        finally:
+        except:
+            queue.put((True, sys.exc_info()))
+        else:
             queue.put((True, None))
 
     threading.Thread(target=fetcher, daemon=True).start()
@@ -171,7 +177,11 @@ def prefetch(iterable):
         while True:
             is_end, item = queue.get()
             if is_end:
-                return
+                if item is None:
+                    return
+                else:
+                    typ, val, tb = item
+                    raise val.with_traceback(tb)
             yield item
 
     return yielder()
@@ -249,7 +259,7 @@ def dump_config_to_yaml(cfg, filename=None):
         elif isinstance(value, (list, tuple)):
             return value.__class__(map(config_to_plain_data, value))
         else:
-            raise TypeError(value.__class__)
+            return value
 
     data = config_to_plain_data(cfg)
     if filename is None:
@@ -262,3 +272,11 @@ def dump_config_to_yaml(cfg, filename=None):
 def image_from_torch(image):
     image = image.cpu().numpy()
     return np.transpose(image.astype("uint8"), (1, 2, 0))
+
+
+def get_norm_cls(name):
+    from torch import nn
+    if name == "batch":
+        return nn.BatchNorm2d
+    if name == "instance":
+        return nn.InstanceNorm2d

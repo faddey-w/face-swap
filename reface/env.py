@@ -10,8 +10,11 @@ except OSError:
 is_cloud = is_colab or is_aws_ec2
 
 
-if is_cloud:
+if is_aws_ec2:
     device = "cuda"
+elif is_colab:
+    import torch
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 else:
     device = "cpu"
 
