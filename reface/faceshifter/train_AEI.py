@@ -211,7 +211,7 @@ class Trainer:
             ) / (same_person.sum() + 1e-6)
             self._metrics.log(loss_g_rec=float(loss_g_rec))
 
-            loss_g = 1 * loss_g_adv + 10 * loss_g_attr + 5 * loss_g_id + 10 * loss_g_rec
+            loss_g = 0.1 * loss_g_adv + loss_g_attr + 0.5 * loss_g_id + loss_g_rec
             self._metrics.log(loss_g=float(loss_g))
             loss_g.backward()
             self.opt_g.step()
