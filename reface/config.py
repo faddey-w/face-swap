@@ -41,3 +41,8 @@ class Config:
         VIS_PERIOD: int
         VIS_MAX_IMAGES: int
 
+    class TEST:
+        VIS_PERIOD: int
+        VIS_MAX_IMAGES: int
+
+

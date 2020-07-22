@@ -157,8 +157,8 @@ def build_data_loader(dataset, cfg: Config, for_training: bool):
         sampler = TrainSampler(plain_dataset, cfg)
         batch_size = cfg.INPUT.TRAIN.BATCH_SIZE
     else:
-        sampler = torch.utils.data.SequentialSampler(plain_dataset)
-        batch_size = 1
+        sampler = torch.utils.data.RandomSampler(plain_dataset)
+        batch_size = cfg.TEST.VIS_MAX_IMAGES
     batch_sampler = torch.utils.data.sampler.BatchSampler(
         sampler,
         # two persons is an item:

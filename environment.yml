@@ -23,3 +23,4 @@ dependencies:
       - torchvision==0.5.0
       - tensorboard==1.14
       - opencv-python-headless==4.3.0.36
+      - visdom==0.1.8.9

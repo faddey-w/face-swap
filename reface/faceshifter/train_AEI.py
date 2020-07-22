@@ -10,8 +10,8 @@ import os
 import itertools
 import threading
 import datetime
+import visdom
 from collections import defaultdict
-from dataclasses import dataclass
 from reface import env, data_lib, utils
 from reface.config import Config
 from torch.utils.tensorboard import SummaryWriter
@@ -94,15 +94,26 @@ class ModelManager:
 
 
 class Trainer:
-    def __init__(self, model_manager: ModelManager, dataset: data_lib.Dataset):
+    def __init__(
+        self, model_manager: ModelManager,
+            train_dataset: data_lib.Dataset,
+            test_dataset: data_lib.Dataset,
+            visdom_port=8097
+    ):
         self.model_manager = model_manager
         self.cfg: Config = model_manager.cfg
-        self.dataset = dataset
+        self.train_dataset = train_dataset
+        self.test_dataset = test_dataset
         self.face_recognizer = FaceRecognizer()
         self.dataloader = data_lib.build_data_loader(
-            self.dataset, self.cfg, for_training=True
+            self.train_dataset, self.cfg, for_training=True
         )
         self.data_gen = iter(self.dataloader)
+        self.dataloader_test = data_lib.build_data_loader(
+            self.test_dataset, self.cfg, for_training=False
+        )
+
+        torch.random.manual_seed(self.cfg.RANDOM_SEED)
 
         self.generator, self.discriminator = self.model_manager.build_model()
         self.opt_g, self.opt_d = self.model_manager.build_optimizer(
@@ -120,22 +131,9 @@ class Trainer:
 
         self._summary_writer = SummaryWriter(self.model_manager.model_dir)
         self._log_file = open(os.path.join(model_manager.model_dir, "log.txt"), "a")
-
-        self._train_stop_requested = threading.Event()
-
-    def stop_train(self):
-        self._train_stop_requested.set()
+        self._vis = visdom.Visdom("http://0.0.0.0", port=visdom_port)
 
     def train(self):
-        try:
-            yield from self._train_loop()
-        finally:
-            self._log_file.flush()
-
-    def train_in_background(self):
-        return utils.prefetch(self.train(), 100)
-
-    def _train_loop(self):
         batch_size = self.cfg.INPUT.TRAIN.BATCH_SIZE
 
         self.generator.train()
@@ -150,8 +148,6 @@ class Trainer:
         self._metrics.log(data_failures=0)
 
         for self.it in itertools.count(self.start_it):
-            if self._train_stop_requested.isSet():
-                break
             step_start_time = time.time()
             data = next(self.data_gen)
 
@@ -246,9 +242,22 @@ class Trainer:
             self._metrics.set_iteration(self.it)
 
             if (self.it + 1) % self.cfg.TRAINING.VIS_PERIOD == 0:
-                yield VisualizationEvent(
-                    self.it,
+                self._vis.image(
                     self._make_visualization(img_source, img_target, img_result),
+                    "AEI-train",
+                    opts=dict(caption="AEI-train")
+                )
+            if (self.it + 1) % self.cfg.TEST.VIS_PERIOD == 0:
+                data_test = next(iter(self.dataloader_test))
+                img_source_test = data_test["images1"]
+                img_target_test = data_test["images2"]
+                with torch.no_grad():
+                    face_embed_test = self.face_recognizer(img_source_test)
+                    img_result_test, _ = self.generator(img_target_test, face_embed_test)
+                self._vis.image(
+                    self._make_visualization(img_source_test, img_target_test, img_result_test),
+                    "AEI-test",
+                    opts=dict(caption="AEI-test")
                 )
             if (self.it + 1) % self.cfg.TRAINING.CHECKPOINT_PERIOD == 0:
                 self.model_manager.save_checkpoint(
@@ -263,7 +272,7 @@ class Trainer:
                     f"{key}={valstr}" for key, valstr in metrics_formatted.items()
                 )
                 print(message, file=self._log_file)
-                yield MetricsEvent(it, metrics, message)
+                print(message)
 
     def _make_visualization(self, img_source, img_target, img_result):
         def get_grid_image(img):
@@ -275,29 +284,8 @@ class Trainer:
         img_target = get_grid_image(img_target)
         img_result = get_grid_image(img_result)
         vis_result = torch.cat((img_source, img_result, img_target), dim=2)
-        vis_result = 255 * ((vis_result + 1) / 2)
-        vis_result = vis_result.numpy().astype("uint8")
-        vis_result = np.transpose(vis_result, (1, 2, 0))
+        vis_result = (vis_result + 1) / 2
         return vis_result
-
-
-@dataclass
-class MetricsEvent:
-    it: int
-    metrics: dict
-    message: str
-
-    is_metrics = True
-    is_visualization = False
-
-
-@dataclass
-class VisualizationEvent:
-    it: int
-    image: np.ndarray
-
-    is_metrics = False
-    is_visualization = True
 
 
 class MetricsAccumulator:
