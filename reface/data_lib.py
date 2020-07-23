@@ -151,7 +151,7 @@ class TrainSampler(torch.utils.data.Sampler):
 
 def build_data_loader(dataset, cfg: Config, for_training: bool):
     plain_dataset = dataset
-    dataset = MappedDataset(dataset, cfg, env.device)
+    dataset = MappedDataset(dataset, cfg, "cpu")
 
     if for_training:
         sampler = TrainSampler(plain_dataset, cfg)
@@ -201,7 +201,7 @@ def _collate_batch(batch):
         "images1": torch.stack(images1, 0),
         "images2": torch.stack(images2, 0),
         "image_id_pairs": image_id_pairs,
-        "same_person": torch.tensor(same_person, device=env.device),
+        "same_person": torch.tensor(same_person),
         "failed_image_ids": failed_image_ids,
     }
 

@@ -12,7 +12,7 @@ dependencies:
   - tblib=1.6.0
   - pip:
       - numpy==1.16.4
-      - opencv-python==4.3.0.36
+      - opencv-python==4.1.*
       - dacite==1.0.2
       - dataclasses
       - boto3
@@ -22,5 +22,6 @@ dependencies:
       - torch==1.4.0
       - torchvision==0.5.0
       - tensorboard==1.14
-      - opencv-python-headless==4.3.0.36
+      - opencv-python-headless==4.1.*
       - visdom==0.1.8.9
+      - facenet_pytorch==2.3.0

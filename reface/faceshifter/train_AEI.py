@@ -54,13 +54,19 @@ class ModelManager:
 
     def save_checkpoint(self, generator, discriminator, optimizer_g, optimizer_d, it):
         ckpt = {
-            "generator": generator,
-            "discriminator": discriminator,
-            "optimizer_g": optimizer_g,
-            "optimizer_d": optimizer_d,
+            "generator": generator.state_dict(),
+            "discriminator": discriminator.state_dict(),
+            "optimizer_g": optimizer_g.state_dict(),
+            "optimizer_d": optimizer_d.state_dict(),
         }
         ckpt_path = os.path.join(self.model_dir, f"model_{it:07d}.ckpt")
         torch.save(ckpt, ckpt_path)
+
+        all_ckpts = self._list_checkpoint_paths()
+        for _, old_ckpt_path in all_ckpts[: -self.cfg.TRAINING.CHECKPOINTS_MAX_LAST]:
+            os.remove(old_ckpt_path)
+
+        return ckpt_path
 
     def load_from_checkpoint(
         self, generator, discriminator, optimizer_g, optimizer_d, it=None
@@ -72,8 +78,8 @@ class ModelManager:
         ckpt = torch.load(ckpt_path, map_location=torch.device("cpu"))
         generator.load_state_dict(ckpt["generator"], strict=False)
         discriminator.load_state_dict(ckpt["discriminator"], strict=False)
-        optimizer_g.load_state_dict(ckpt["optimizer_g"], strict=False)
-        optimizer_d.load_state_dict(ckpt["optimizer_d"], strict=False)
+        optimizer_g.load_state_dict(ckpt["optimizer_g"])
+        optimizer_d.load_state_dict(ckpt["optimizer_d"])
         return it
 
     @classmethod
@@ -95,10 +101,11 @@ class ModelManager:
 
 class Trainer:
     def __init__(
-        self, model_manager: ModelManager,
-            train_dataset: data_lib.Dataset,
-            test_dataset: data_lib.Dataset,
-            visdom_port=8097
+        self,
+        model_manager: ModelManager,
+        train_dataset: data_lib.Dataset,
+        test_dataset: data_lib.Dataset,
+        visdom_port=8097,
     ):
         self.model_manager = model_manager
         self.cfg: Config = model_manager.cfg
@@ -161,9 +168,9 @@ class Trainer:
 
             self._metrics.log(data_time=time.time() - step_start_time)
 
-            img_source = data["images1"]
-            img_target = data["images2"]
-            same_person = data["same_person"]
+            img_source = data["images1"].to(env.device)
+            img_target = data["images2"].to(env.device)
+            same_person = data["same_person"].to(env.device)
             with torch.no_grad():
                 face_embed_orig = self.face_recognizer(img_source)
 
@@ -175,12 +182,13 @@ class Trainer:
             loss_g_adv = 0
             for di in avd_discr_scores:
                 loss_g_adv += hinge_loss(di[0], True)
+            loss_g_adv *= 0.1
             self._metrics.log(loss_g_adv=float(loss_g_adv))
 
             face_embed_result = self.face_recognizer(img_result)
 
             # noinspection PyTypeChecker,PyUnresolvedReferences
-            loss_g_id = (
+            loss_g_id = 0.5 * (
                 1 - torch.cosine_similarity(face_embed_orig, face_embed_result, dim=1)
             ).mean()
 
@@ -207,7 +215,7 @@ class Trainer:
             ) / (same_person.sum() + 1e-6)
             self._metrics.log(loss_g_rec=float(loss_g_rec))
 
-            loss_g = 0.1 * loss_g_adv + loss_g_attr + 0.5 * loss_g_id + loss_g_rec
+            loss_g = loss_g_adv + loss_g_attr + loss_g_id + loss_g_rec
             self._metrics.log(loss_g=float(loss_g))
             loss_g.backward()
             self.opt_g.step()
@@ -243,27 +251,40 @@ class Trainer:
 
             if (self.it + 1) % self.cfg.TRAINING.VIS_PERIOD == 0:
                 self._vis.image(
-                    self._make_visualization(img_source, img_target, img_result),
+                    self._make_visualization(
+                        img_source,
+                        img_target,
+                        img_result,
+                        self.cfg.TRAINING.VIS_MAX_IMAGES,
+                    ),
                     "AEI-train",
-                    opts=dict(caption="AEI-train")
+                    opts=dict(caption="AEI-train"),
                 )
             if (self.it + 1) % self.cfg.TEST.VIS_PERIOD == 0:
                 data_test = next(iter(self.dataloader_test))
-                img_source_test = data_test["images1"]
-                img_target_test = data_test["images2"]
+                img_source_test = data_test["images1"].to(env.device)
+                img_target_test = data_test["images2"].to(env.device)
                 with torch.no_grad():
                     face_embed_test = self.face_recognizer(img_source_test)
-                    img_result_test, _ = self.generator(img_target_test, face_embed_test)
+                    img_result_test, _ = self.generator(
+                        img_target_test, face_embed_test
+                    )
                 self._vis.image(
-                    self._make_visualization(img_source_test, img_target_test, img_result_test),
+                    self._make_visualization(
+                        img_source_test,
+                        img_target_test,
+                        img_result_test,
+                        self.cfg.TEST.VIS_MAX_IMAGES,
+                    ),
                     "AEI-test",
-                    opts=dict(caption="AEI-test")
+                    opts=dict(caption="AEI-test"),
                 )
-            if (self.it + 1) % self.cfg.TRAINING.CHECKPOINT_PERIOD == 0:
-                self.model_manager.save_checkpoint(
+            if self.it and self.it % self.cfg.TRAINING.CHECKPOINT_PERIOD == 0:
+                ckpt_path = self.model_manager.save_checkpoint(
                     self.generator, self.discriminator, self.opt_g, self.opt_d, self.it
                 )
-            if (self.it + 1) % self.cfg.TRAINING.LOG_PERIOD == 0:
+                print("checkpoint:", ckpt_path)
+            if self.it % self.cfg.TRAINING.LOG_PERIOD == 0:
                 it, metrics, metrics_formatted = self._metrics.get_values(True)
                 for key, val in metrics.items():
                     self._summary_writer.add_scalar(key, val, it)
@@ -271,12 +292,14 @@ class Trainer:
                 message = f"{now} | {it}: " + " ".join(
                     f"{key}={valstr}" for key, valstr in metrics_formatted.items()
                 )
-                print(message, file=self._log_file)
+                print(message, file=self._log_file, flush=True)
                 print(message)
 
-    def _make_visualization(self, img_source, img_target, img_result):
+    def _make_visualization(self, img_source, img_target, img_result, max_images=None):
         def get_grid_image(img):
-            img = img[: self.cfg.TRAINING.VIS_MAX_IMAGES]
+            if max_images is not None:
+                step = img.shape[0] // max_images
+                img = img[:step*max_images:step]
             img = torchvision.utils.make_grid(img.detach().cpu(), nrow=1)
             return img
 

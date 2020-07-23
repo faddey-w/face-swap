@@ -6,3 +6,6 @@
 compiled.ipynb
 .aqx.ini
 reface/aws-creds.json
+.data
+.models
+.local
