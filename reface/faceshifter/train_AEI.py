@@ -166,7 +166,7 @@ class Trainer:
                     / ((self.it + 1) * batch_size)
                 )
 
-            self._metrics.log(data_time=time.time() - step_start_time)
+            self._metrics.log(time_data=time.time() - step_start_time)
 
             img_source = data["images1"].to(env.device)
             img_target = data["images2"].to(env.device)
@@ -241,11 +241,11 @@ class Trainer:
             loss_d.backward()
             self.opt_d.step()
 
-            self._metrics.log(step_time=time.time() - step_start_time)
+            self._metrics.log(time_step=time.time() - step_start_time)
 
             if torch.cuda.is_available():
                 max_mem_mb = torch.cuda.max_memory_allocated() / 1024.0 / 1024.0
-                self._metrics.log(gpu_mem=max_mem_mb, fmt=".0f")
+                self._metrics.log(mem_gpu=max_mem_mb, fmt=".0f")
 
             self._metrics.set_iteration(self.it)
 
@@ -284,9 +284,11 @@ class Trainer:
                     self.generator, self.discriminator, self.opt_g, self.opt_d, self.it
                 )
                 print("checkpoint:", ckpt_path)
-            if self.it % self.cfg.TRAINING.LOG_PERIOD == 0:
+            if self.it and self.it % self.cfg.TRAINING.LOG_PERIOD == 0:
                 it, metrics, metrics_formatted = self._metrics.get_values(True)
                 for key, val in metrics.items():
+                    section, _, subkey = key.partition("_")
+                    key = section + "/" + subkey
                     self._summary_writer.add_scalar(key, val, it)
                 now = datetime.datetime.now().time().isoformat()
                 message = f"{now} | {it}: " + " ".join(
