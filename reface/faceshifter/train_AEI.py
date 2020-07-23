@@ -136,7 +136,9 @@ class Trainer:
             self.start_it = 0
         self._metrics = MetricsAccumulator("2.3f", self.start_it)
 
-        self._summary_writer = SummaryWriter(self.model_manager.model_dir)
+        self._summary_writer = SummaryWriter(
+            self.model_manager.model_dir, flush_secs=30
+        )
         self._log_file = open(os.path.join(model_manager.model_dir, "log.txt"), "a")
         self._vis = visdom.Visdom("http://0.0.0.0", port=visdom_port)
 
@@ -180,17 +182,21 @@ class Trainer:
 
             avd_discr_scores = self.discriminator(img_result)
             loss_g_adv = 0
-            for di in avd_discr_scores:
-                loss_g_adv += hinge_loss(di[0], True)
+            for d_scores_map in avd_discr_scores:
+                loss_g_adv += hinge_loss(d_scores_map, True)
             loss_g_adv *= 0.1
             self._metrics.log(loss_g_adv=float(loss_g_adv))
 
             face_embed_result = self.face_recognizer(img_result)
 
             # noinspection PyTypeChecker,PyUnresolvedReferences
-            loss_g_id = 0.5 * (
-                1 - torch.cosine_similarity(face_embed_orig, face_embed_result, dim=1)
-            ).mean()
+            loss_g_id = (
+                0.5
+                * (
+                    1
+                    - torch.cosine_similarity(face_embed_orig, face_embed_result, dim=1)
+                ).mean()
+            )
 
             self._metrics.log(loss_g_id=float(loss_g_id))
 
@@ -224,14 +230,14 @@ class Trainer:
             self.opt_d.zero_grad()
             fake_discr_scores = self.discriminator(img_result.detach())
             loss_d_fake = 0
-            for di in fake_discr_scores:
-                loss_d_fake += hinge_loss(di[0], False)
+            for d_scores_map in fake_discr_scores:
+                loss_d_fake += hinge_loss(d_scores_map, False)
             self._metrics.log(loss_d_fake=float(loss_d_fake))
 
             true_discr_scores = self.discriminator(img_source)
             loss_d_true = 0
-            for di in true_discr_scores:
-                loss_d_true += hinge_loss(di[0], True)
+            for d_scores_map in true_discr_scores:
+                loss_d_true += hinge_loss(d_scores_map, True)
             self._metrics.log(loss_d_true=float(loss_d_true))
 
             # noinspection PyTypeChecker
@@ -301,7 +307,7 @@ class Trainer:
         def get_grid_image(img):
             if max_images is not None:
                 step = img.shape[0] // max_images
-                img = img[:step*max_images:step]
+                img = img[: step * max_images : step]
             img = torchvision.utils.make_grid(img.detach().cpu(), nrow=1)
             return img
 

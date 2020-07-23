@@ -1,9 +1,8 @@
 from reface import utils
-from reface.data_lib import Dataset
-from reface.faceshifter.train_AEI import ModelManager, Trainer
+from reface.faceshifter.train_AEI import ModelManager
 
 
-model_dir = ".models/try2"
+model_dir = ".models/batch-8-2_imsz-128_G_L1e-4_D_L1e-3_layers-3_scales-4"
 cfg = utils.load_config_from_yaml_str("""
 RANDOM_SEED: 1
 INPUT:
@@ -11,18 +10,18 @@ INPUT:
     IMAGE_SIZE: 128
     N_CHANNELS: 3
     TRAIN:
-        BATCH_SIZE: 32
-        SAME_PERSON_PAIRS_PER_BATCH: 8
+        BATCH_SIZE: 8
+        SAME_PERSON_PAIRS_PER_BATCH: 2
     LOADER:
         NUM_WORKERS: 16
 GENERATOR:
     DIMS: [32, 64, 128, 256, 512]#, 1024, 1024]
-    LR: 0.0004
+    LR: 0.0001
 DISCRIMINATOR:
-    LR: 0.00004
+    LR: 0.001
     CONV_SIZE: 4
-    N_SCALES: 3
-    N_LAYERS: 6
+    N_SCALES: 4
+    N_LAYERS: 3
     BASE_DIM: 64
     MAX_DIM: 512
     NORM_LAYER: instance
@@ -39,11 +38,4 @@ TEST:
     VIS_MAX_IMAGES: 4
 """)
 
-
 ModelManager.create_model_dir(cfg, model_dir, strict=True)
-mmgr = ModelManager(model_dir)
-ds_train = Dataset("train")
-ds_test = Dataset("test")
-trainer = Trainer(mmgr, ds_train, ds_test)
-
-trainer.train()

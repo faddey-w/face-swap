@@ -56,12 +56,15 @@ class NLayerDiscriminator(nn.Module):
         if cfg.DISCRIMINATOR.USE_SIGMOID:
             self.layers += [nn.Sigmoid()]
 
-    def forward(self, image):
+    def forward(self, image, get_intermediate_features=False):
         res = [image]
         # noinspection PyTypeChecker
         for layer in self.layers:
             res.append(layer(res[-1]))
-        return res[1:]
+        if get_intermediate_features:
+            return res[1:]
+        else:
+            return res[-1]
 
 
 class MultiscaleDiscriminator(nn.Module):
