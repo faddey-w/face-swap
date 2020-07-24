@@ -105,8 +105,14 @@ class Trainer:
         model_manager: ModelManager,
         train_dataset: data_lib.Dataset,
         test_dataset: data_lib.Dataset,
-        visdom_port=8097,
+        visdom_addr=None,
     ):
+        if visdom_addr is None:
+            visdom_addr = "http://0.0.0.0", 8097
+        elif isinstance(visdom_addr, str):
+            visdom_addr = visdom_addr, 8097
+        elif isinstance(visdom_addr, int):
+            visdom_addr = "http://0.0.0.0", visdom_addr
         self.model_manager = model_manager
         self.cfg: Config = model_manager.cfg
         self.train_dataset = train_dataset
@@ -117,8 +123,9 @@ class Trainer:
         )
         self.data_gen = iter(self.dataloader)
         self.dataloader_test = data_lib.build_data_loader(
-            self.test_dataset, self.cfg, for_training=False
+            self.test_dataset, self.cfg, for_training=False, num_workers=1
         )
+        self.data_gen_test = iter(self.dataloader_test)
 
         torch.random.manual_seed(self.cfg.RANDOM_SEED)
 
@@ -140,19 +147,15 @@ class Trainer:
             self.model_manager.model_dir, flush_secs=30
         )
         self._log_file = open(os.path.join(model_manager.model_dir, "log.txt"), "a")
-        self._vis = visdom.Visdom("http://0.0.0.0", port=visdom_port)
+        self._vis = visdom.Visdom(
+            visdom_addr[0],
+            port=visdom_addr[1],
+            env=os.path.relpath(self.model_manager.model_dir, env.models_dir),
+        )
 
     def train(self):
-        batch_size = self.cfg.INPUT.TRAIN.BATCH_SIZE
-
         self.generator.train()
         self.discriminator.train()
-
-        def hinge_loss(X, positive=True):
-            if positive:
-                return torch.relu(1 - X).mean()
-            else:
-                return torch.relu(X + 1).mean()
 
         self._metrics.log(data_failures=0)
 
@@ -165,7 +168,7 @@ class Trainer:
                 sampler.disable_failed_entries(data["failed_image_ids"])
                 self._metrics.log(
                     data_failures=sampler.total_failed_entries
-                    / ((self.it + 1) * batch_size)
+                    / ((self.it + 1) * self.cfg.INPUT.TRAIN.BATCH_SIZE)
                 )
 
             self._metrics.log(time_data=time.time() - step_start_time)
@@ -179,72 +182,29 @@ class Trainer:
             # train G
             self.opt_g.zero_grad()
             img_result, target_attrs = self.generator(img_target, face_embed_orig)
-
-            avd_discr_scores = self.discriminator(img_result)
-            loss_g_adv = 0
-            for d_scores_map in avd_discr_scores:
-                loss_g_adv += hinge_loss(d_scores_map, True)
-            loss_g_adv *= 0.1
-            self._metrics.log(loss_g_adv=float(loss_g_adv))
-
-            face_embed_result = self.face_recognizer(img_result)
-
-            # noinspection PyTypeChecker,PyUnresolvedReferences
-            loss_g_id = (
-                0.5
-                * (
-                    1
-                    - torch.cosine_similarity(face_embed_orig, face_embed_result, dim=1)
-                ).mean()
+            losses_g = self._get_generator_losses(
+                face_embed_orig, img_target, target_attrs, img_result, same_person
             )
-
-            self._metrics.log(loss_g_id=float(loss_g_id))
-
-            result_attrs = self.generator.get_attr(img_result)
-            loss_g_attr = 0
-            for i in range(len(target_attrs)):
-                loss_g_attr += torch.mean(
-                    torch.pow(target_attrs[i] - result_attrs[i], 2).reshape(
-                        batch_size, -1
-                    ),
-                    dim=1,
-                ).mean()
-            loss_g_attr /= 2.0
-            self._metrics.log(loss_g_attr=float(loss_g_attr))
-
-            loss_g_rec = torch.sum(
-                0.5
-                * torch.mean(
-                    torch.pow(img_result - img_target, 2).reshape(batch_size, -1), dim=1
-                )
-                * same_person
-            ) / (same_person.sum() + 1e-6)
-            self._metrics.log(loss_g_rec=float(loss_g_rec))
-
-            loss_g = loss_g_adv + loss_g_attr + loss_g_id + loss_g_rec
-            self._metrics.log(loss_g=float(loss_g))
-            loss_g.backward()
+            self._metrics.log(
+                Loss_G_adv=float(losses_g["adv"]),
+                Loss_G_id=float(losses_g["id"]),
+                Loss_G_attr=float(losses_g["attr"]),
+                Loss_G_rec=float(losses_g["rec"]),
+                Loss_G=float(losses_g["total"]),
+            )
+            losses_g["total"].backward()
             self.opt_g.step()
 
             # train D
             self.opt_d.zero_grad()
-            fake_discr_scores = self.discriminator(img_result.detach())
-            loss_d_fake = 0
-            for d_scores_map in fake_discr_scores:
-                loss_d_fake += hinge_loss(d_scores_map, False)
-            self._metrics.log(loss_d_fake=float(loss_d_fake))
+            losses_d = self._get_discriminator_losses(img_target, img_result.detach())
+            self._metrics.log(
+                Loss_D_fake=float(losses_d["fake"]),
+                Loss_D_true=float(losses_d["true"]),
+                Loss_D=float(losses_d["total"]),
+            )
 
-            true_discr_scores = self.discriminator(img_source)
-            loss_d_true = 0
-            for d_scores_map in true_discr_scores:
-                loss_d_true += hinge_loss(d_scores_map, True)
-            self._metrics.log(loss_d_true=float(loss_d_true))
-
-            # noinspection PyTypeChecker
-            loss_d = 0.5 * (torch.mean(loss_d_true) + torch.mean(loss_d_fake))
-            self._metrics.log(loss_d=loss_d.item())
-
-            loss_d.backward()
+            losses_d["total"].backward()
             self.opt_d.step()
 
             self._metrics.log(time_step=time.time() - step_start_time)
@@ -256,52 +216,151 @@ class Trainer:
             self._metrics.set_iteration(self.it)
 
             if (self.it + 1) % self.cfg.TRAINING.VIS_PERIOD == 0:
-                self._vis.image(
-                    self._make_visualization(
-                        img_source,
-                        img_target,
-                        img_result,
-                        self.cfg.TRAINING.VIS_MAX_IMAGES,
-                    ),
-                    "AEI-train",
-                    opts=dict(caption="AEI-train"),
-                )
+                self._visualize_train(img_source, img_target, img_result)
             if (self.it + 1) % self.cfg.TEST.VIS_PERIOD == 0:
-                data_test = next(iter(self.dataloader_test))
-                img_source_test = data_test["images1"].to(env.device)
-                img_target_test = data_test["images2"].to(env.device)
-                with torch.no_grad():
-                    face_embed_test = self.face_recognizer(img_source_test)
-                    img_result_test, _ = self.generator(
-                        img_target_test, face_embed_test
-                    )
-                self._vis.image(
-                    self._make_visualization(
-                        img_source_test,
-                        img_target_test,
-                        img_result_test,
-                        self.cfg.TEST.VIS_MAX_IMAGES,
-                    ),
-                    "AEI-test",
-                    opts=dict(caption="AEI-test"),
-                )
+                self._visualize_test()
             if self.it and self.it % self.cfg.TRAINING.CHECKPOINT_PERIOD == 0:
                 ckpt_path = self.model_manager.save_checkpoint(
                     self.generator, self.discriminator, self.opt_g, self.opt_d, self.it
                 )
                 print("checkpoint:", ckpt_path)
+            if self.it and self.it % self.cfg.TEST.TEST_PERIOD == 0:
+                self._test()
             if self.it and self.it % self.cfg.TRAINING.LOG_PERIOD == 0:
-                it, metrics, metrics_formatted = self._metrics.get_values(True)
-                for key, val in metrics.items():
-                    section, _, subkey = key.partition("_")
-                    key = section + "/" + subkey
-                    self._summary_writer.add_scalar(key, val, it)
-                now = datetime.datetime.now().time().isoformat()
-                message = f"{now} | {it}: " + " ".join(
-                    f"{key}={valstr}" for key, valstr in metrics_formatted.items()
+                self._log_metrics()
+
+    def _get_generator_losses(
+        self, face_embed, img_target, target_attrs, img_result, same_person
+    ):
+        avd_discr_scores = self.discriminator(img_result)
+        loss_g_adv = 0
+        for d_scores_map in avd_discr_scores:
+            loss_g_adv += hinge_loss(d_scores_map, True)
+        loss_g_adv *= 0.1
+        self._metrics.log(loss_g_adv=float(loss_g_adv))
+
+        face_embed_result = self.face_recognizer(img_result)
+
+        # noinspection PyTypeChecker,PyUnresolvedReferences
+        loss_g_id = (
+            0.5
+            * (1 - torch.cosine_similarity(face_embed, face_embed_result, dim=1)).mean()
+        )
+
+        self._metrics.log(loss_g_id=float(loss_g_id))
+
+        result_attrs = self.generator.get_attr(img_result)
+        loss_g_attr = 0
+        for i in range(len(target_attrs)):
+            loss_g_attr += torch.mean(
+                torch.pow(target_attrs[i] - result_attrs[i], 2).reshape(
+                    self.cfg.INPUT.TRAIN.BATCH_SIZE, -1
+                ),
+                dim=1,
+            ).mean()
+        loss_g_attr /= 2.0
+        self._metrics.log(loss_g_attr=float(loss_g_attr))
+
+        loss_g_rec = torch.sum(
+            0.5
+            * torch.mean(
+                torch.pow(img_result - img_target, 2).reshape(
+                    self.cfg.INPUT.TRAIN.BATCH_SIZE, -1
+                ),
+                dim=1,
+            )
+            * same_person
+        ) / (same_person.sum() + 1e-6)
+        self._metrics.log(loss_g_rec=float(loss_g_rec))
+
+        loss_g = loss_g_adv + loss_g_attr + loss_g_id + loss_g_rec
+        self._metrics.log(loss_g=float(loss_g))
+
+        return dict(
+            adv=loss_g_adv, attr=loss_g_attr, id=loss_g_id, rec=loss_g_rec, total=loss_g
+        )
+
+    def _get_discriminator_losses(self, img_real, img_generated):
+        fake_discr_scores = self.discriminator(img_generated)
+        loss_d_fake = 0
+        for d_scores_map in fake_discr_scores:
+            loss_d_fake += hinge_loss(d_scores_map, False)
+        self._metrics.log(loss_d_fake=float(loss_d_fake))
+
+        true_discr_scores = self.discriminator(img_real)
+        loss_d_true = 0
+        for d_scores_map in true_discr_scores:
+            loss_d_true += hinge_loss(d_scores_map, True)
+        self._metrics.log(loss_d_true=float(loss_d_true))
+
+        # noinspection PyTypeChecker
+        loss_d = 0.5 * (torch.mean(loss_d_true) + torch.mean(loss_d_fake))
+        self._metrics.log(loss_d=loss_d.item())
+
+        return dict(true=loss_d_true, fake=loss_d_fake, total=loss_d)
+
+    def _test(self):
+        for _ in range(self.cfg.TEST.N_TEST_BATCHES):
+            data = next(self.data_gen_test)
+            img_source = data["images1"].to(env.device)
+            img_target = data["images2"].to(env.device)
+            same_person = data["same_person"].to(env.device)
+            with torch.no_grad():
+                face_embed = self.face_recognizer(img_source)
+                img_result, target_attrs = self.generator(img_target, face_embed)
+                losses_g = self._get_generator_losses(
+                    face_embed, img_target, target_attrs, img_result, same_person
                 )
-                print(message, file=self._log_file, flush=True)
-                print(message)
+                self._metrics.log(
+                    LossTest_G_adv=float(losses_g["adv"]),
+                    LossTest_G_id=float(losses_g["id"]),
+                    LossTest_G_attr=float(losses_g["attr"]),
+                    LossTest_G_rec=float(losses_g["rec"]),
+                    LossTest_G=float(losses_g["total"]),
+                )
+                losses_d = self._get_discriminator_losses(img_target, img_result)
+                self._metrics.log(
+                    LossTest_D_fake=float(losses_d["fake"]),
+                    LossTest_D_true=float(losses_d["true"]),
+                    LossTest_D=float(losses_d["total"]),
+                )
+
+    def _visualize_train(self, img_source, img_target, img_result):
+        self._vis.image(
+            self._make_visualization(
+                img_source, img_target, img_result, self.cfg.TRAINING.VIS_MAX_IMAGES
+            ),
+            "AEI-train",
+            opts=dict(caption="AEI-train"),
+        )
+
+    def _visualize_test(self):
+        data_test = next(self.data_gen_test)
+        img_source = data_test["images1"].to(env.device)
+        img_target = data_test["images2"].to(env.device)
+        with torch.no_grad():
+            face_embed_test = self.face_recognizer(img_source)
+            img_result_test, _ = self.generator(img_target, face_embed_test)
+        self._vis.image(
+            self._make_visualization(
+                img_source, img_target, img_result_test, self.cfg.TEST.VIS_MAX_IMAGES
+            ),
+            "AEI-test",
+            opts=dict(caption="AEI-test"),
+        )
+
+    def _log_metrics(self):
+        it, metrics, metrics_formatted = self._metrics.get_values(True)
+        for key, val in metrics.items():
+            section, _, subkey = key.partition("_")
+            key = section + "/" + subkey
+            self._summary_writer.add_scalar(key, val, it)
+        now = datetime.datetime.now().time().isoformat()
+        message = f"{now} | {it}: " + " ".join(
+            f"{key}={valstr}" for key, valstr in metrics_formatted.items()
+        )
+        print(message, file=self._log_file, flush=True)
+        print(message)
 
     def _make_visualization(self, img_source, img_target, img_result, max_images=None):
         def get_grid_image(img):
@@ -361,3 +420,10 @@ class MetricsAccumulator:
             return it, result, formatted
         else:
             return it, result
+
+
+def hinge_loss(X, positive=True):
+    if positive:
+        return torch.relu(1 - X).mean()
+    else:
+        return torch.relu(X + 1).mean()

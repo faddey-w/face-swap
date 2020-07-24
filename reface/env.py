@@ -20,3 +20,4 @@ else:
 
 
 repo_root = os.path.dirname(os.path.dirname(__file__))
+models_dir = ".models"

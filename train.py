@@ -10,7 +10,7 @@ def main():
     mmgr = ModelManager(opts.model_dir)
     ds_train = Dataset("train")
     ds_test = Dataset("test")
-    trainer = Trainer(mmgr, ds_train, ds_test)
+    trainer = Trainer(mmgr, ds_train, ds_test, visdom_addr="http://172.31.45.229")
 
     trainer.train()
 

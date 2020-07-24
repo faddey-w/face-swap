@@ -149,9 +149,12 @@ class TrainSampler(torch.utils.data.Sampler):
                 self.total_failed_entries += 1
 
 
-def build_data_loader(dataset, cfg: Config, for_training: bool):
+def build_data_loader(dataset, cfg: Config, for_training: bool, num_workers=None):
     plain_dataset = dataset
     dataset = MappedDataset(dataset, cfg, "cpu")
+
+    if num_workers is None:
+        num_workers = cfg.INPUT.LOADER.NUM_WORKERS
 
     if for_training:
         sampler = TrainSampler(plain_dataset, cfg)
@@ -168,7 +171,7 @@ def build_data_loader(dataset, cfg: Config, for_training: bool):
 
     data_loader = torch.utils.data.DataLoader(
         dataset,
-        num_workers=cfg.INPUT.LOADER.NUM_WORKERS,
+        num_workers=num_workers,
         batch_sampler=batch_sampler,
         collate_fn=_collate_batch,
         pin_memory=env.device == "cuda",
