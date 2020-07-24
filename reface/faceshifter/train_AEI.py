@@ -7,12 +7,13 @@ import time
 import torchvision
 import numpy as np
 import os
+import tqdm
 import itertools
 import threading
 import datetime
 import visdom
 from collections import defaultdict
-from reface import env, data_lib, utils
+from reface import env, data_lib, utils, compat
 from reface.config import Config
 from torch.utils.tensorboard import SummaryWriter
 
@@ -21,6 +22,7 @@ class ModelManager:
     def __init__(self, model_dir):
         self.model_dir = model_dir
         self.cfg = utils.load_config_from_yaml_file(self._get_config_path(model_dir))
+        compat.make_compatible_config(self.cfg)
 
     # noinspection PyUnresolvedReferences
     def build_model(self):
@@ -232,12 +234,12 @@ class Trainer:
     def _get_generator_losses(
         self, face_embed, img_target, target_attrs, img_result, same_person
     ):
+        batch_size = img_target.shape[0]
         avd_discr_scores = self.discriminator(img_result)
         loss_g_adv = 0
         for d_scores_map in avd_discr_scores:
             loss_g_adv += hinge_loss(d_scores_map, True)
         loss_g_adv *= 0.1
-        self._metrics.log(loss_g_adv=float(loss_g_adv))
 
         face_embed_result = self.face_recognizer(img_result)
 
@@ -247,34 +249,24 @@ class Trainer:
             * (1 - torch.cosine_similarity(face_embed, face_embed_result, dim=1)).mean()
         )
 
-        self._metrics.log(loss_g_id=float(loss_g_id))
-
         result_attrs = self.generator.get_attr(img_result)
         loss_g_attr = 0
         for i in range(len(target_attrs)):
             loss_g_attr += torch.mean(
-                torch.pow(target_attrs[i] - result_attrs[i], 2).reshape(
-                    self.cfg.INPUT.TRAIN.BATCH_SIZE, -1
-                ),
+                torch.pow(target_attrs[i] - result_attrs[i], 2).reshape(batch_size, -1),
                 dim=1,
             ).mean()
         loss_g_attr /= 2.0
-        self._metrics.log(loss_g_attr=float(loss_g_attr))
 
         loss_g_rec = torch.sum(
             0.5
             * torch.mean(
-                torch.pow(img_result - img_target, 2).reshape(
-                    self.cfg.INPUT.TRAIN.BATCH_SIZE, -1
-                ),
-                dim=1,
+                torch.pow(img_result - img_target, 2).reshape(batch_size, -1), dim=1
             )
             * same_person
         ) / (same_person.sum() + 1e-6)
-        self._metrics.log(loss_g_rec=float(loss_g_rec))
 
         loss_g = loss_g_adv + loss_g_attr + loss_g_id + loss_g_rec
-        self._metrics.log(loss_g=float(loss_g))
 
         return dict(
             adv=loss_g_adv, attr=loss_g_attr, id=loss_g_id, rec=loss_g_rec, total=loss_g
@@ -285,22 +277,19 @@ class Trainer:
         loss_d_fake = 0
         for d_scores_map in fake_discr_scores:
             loss_d_fake += hinge_loss(d_scores_map, False)
-        self._metrics.log(loss_d_fake=float(loss_d_fake))
 
         true_discr_scores = self.discriminator(img_real)
         loss_d_true = 0
         for d_scores_map in true_discr_scores:
             loss_d_true += hinge_loss(d_scores_map, True)
-        self._metrics.log(loss_d_true=float(loss_d_true))
 
         # noinspection PyTypeChecker
         loss_d = 0.5 * (torch.mean(loss_d_true) + torch.mean(loss_d_fake))
-        self._metrics.log(loss_d=loss_d.item())
 
         return dict(true=loss_d_true, fake=loss_d_fake, total=loss_d)
 
     def _test(self):
-        for _ in range(self.cfg.TEST.N_TEST_BATCHES):
+        for _ in tqdm.trange(self.cfg.TEST.N_TEST_BATCHES, desc="TEST"):
             data = next(self.data_gen_test)
             img_source = data["images1"].to(env.device)
             img_target = data["images2"].to(env.device)

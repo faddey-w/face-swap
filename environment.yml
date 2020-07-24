@@ -25,3 +25,4 @@ dependencies:
       - opencv-python-headless==4.1.*
       - visdom==0.1.8.9
       - facenet_pytorch==2.3.0
+      - tensorflow==1.14  # we don't use it but tensorboard has issues without it
