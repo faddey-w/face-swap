@@ -117,6 +117,27 @@ class Trainer:
             visdom_addr = "http://0.0.0.0", visdom_addr
         self.model_manager = model_manager
         self.cfg: Config = model_manager.cfg
+
+        if self.cfg.INPUT.MIN_FACE_SIZE is not None:
+            min_face_size = self.cfg.INPUT.MIN_FACE_SIZE
+            train_dataset = [
+                entry
+                for entry in tqdm.tqdm(
+                    train_dataset,
+                    desc=f"train: filtering out faces < {min_face_size}px",
+                )
+                if get_face_size(entry) >= min_face_size
+            ]
+            test_dataset = [
+                entry
+                for entry in tqdm.tqdm(
+                    test_dataset, desc=f"test: filtering out faces < {min_face_size}px"
+                )
+                if get_face_size(entry) >= min_face_size
+            ]
+
+        print("train size:", len(train_dataset))
+        print("test size:", len(test_dataset))
         self.train_dataset = train_dataset
         self.test_dataset = test_dataset
         self.face_recognizer = FaceRecognizer()
@@ -355,7 +376,8 @@ class Trainer:
         def get_grid_image(img):
             if max_images is not None:
                 step = img.shape[0] // max_images
-                img = img[: step * max_images : step]
+                if step > 0:
+                    img = img[: step * max_images : step]
             img = torchvision.utils.make_grid(img.detach().cpu(), nrow=1)
             return img
 
@@ -416,3 +438,7 @@ def hinge_loss(X, positive=True):
         return torch.relu(1 - X).mean()
     else:
         return torch.relu(X + 1).mean()
+
+
+def get_face_size(entry):
+    return min(data_lib.box_xyxy_to_cxywh(entry["box"])[2:])

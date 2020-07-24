@@ -8,6 +8,7 @@ class Config:
         FACE_BOX_EXTENSION_FACTOR: float
         IMAGE_SIZE: int
         N_CHANNELS: int
+        MIN_FACE_SIZE: int
 
         class TRAIN:
             # this is amount of *pairs*, not individual images per batch
