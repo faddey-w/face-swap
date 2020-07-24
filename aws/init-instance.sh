@@ -21,6 +21,6 @@ sudo yum install -y amazon-efs-utils
 sudo mkdir /mnt/efs
 sudo chmod o+rw /mnt/efs
 sudo mount -t efs fs-db0fa5a3:/ /mnt/efs
-sudo echo "fs-db0fa5a3:/ /mnt/efs efs defaults,_netdev 0 0" | sudo tee /etc/fstab
+sudo echo "fs-db0fa5a3:/ /mnt/efs efs defaults,_netdev 0 0" | sudo tee -a /etc/fstab
 ln -s /mnt/efs/models/ .models
 ln -s /mnt/efs/data .data
