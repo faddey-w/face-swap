@@ -90,7 +90,7 @@ class AADGenerator(nn.Module):
     def __init__(self, cfg: Config):
         super(AADGenerator, self).__init__()
         c_id = face_recognizer.FaceRecognizer.embedding_dimension
-        adaptive_norm = cfg.GENERATOR.AAD_USE_ADAPTIVE_NORM
+        norm = cfg.GENERATOR.AAD_NORM
 
         up1_size = cfg.INPUT.IMAGE_SIZE // (2 ** len(cfg.GENERATOR.DIMS))
         self.up1 = nn.ConvTranspose2d(
@@ -98,17 +98,17 @@ class AADGenerator(nn.Module):
         )
         dims = cfg.GENERATOR.DIMS[::-1]
         self.aad_blocks = nn.ModuleList(
-            [AAD_ResBlk(dims[0], dims[0], dims[0], c_id, adaptive_norm=adaptive_norm)]
+            [AAD_ResBlk(dims[0], dims[0], dims[0], c_id, norm=norm)]
         )
         last_cout = dims[0]
         for i in range(len(dims) - 1):
             cin, cout, c_attr = last_cout, dims[i], 2 * dims[i + 1]
             self.aad_blocks += [
-                AAD_ResBlk(cin, cout, c_attr, c_id, adaptive_norm=adaptive_norm)
+                AAD_ResBlk(cin, cout, c_attr, c_id, norm=norm)
             ]
             last_cout = cout
         self.last_aad_block = AAD_ResBlk(
-            last_cout, 3, 2 * dims[-1], c_id, adaptive_norm=adaptive_norm
+            last_cout, 3, 2 * dims[-1], c_id, norm=norm
         )
         self.apply(weight_init)
 
