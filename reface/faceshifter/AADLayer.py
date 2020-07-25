@@ -3,7 +3,7 @@ import torch.nn as nn
 
 
 class AADLayer(nn.Module):
-    def __init__(self, c_x, attr_c, c_id=256):
+    def __init__(self, c_x, attr_c, c_id=256, adaptive_norm=False):
         super(AADLayer, self).__init__()
         self.attr_c = attr_c
         self.c_id = c_id
@@ -17,7 +17,9 @@ class AADLayer(nn.Module):
         )
         self.fc1 = nn.Linear(c_id, c_x)
         self.fc2 = nn.Linear(c_id, c_x)
-        self.norm = nn.InstanceNorm2d(c_x, affine=False)
+        self.norm = nn.InstanceNorm2d(
+            c_x, affine=False, track_running_stats=adaptive_norm
+        )
 
         self.conv_h = nn.Conv2d(c_x, 1, kernel_size=1, stride=1, padding=0, bias=True)
 
@@ -43,23 +45,23 @@ class AADLayer(nn.Module):
 
 
 class AAD_ResBlk(nn.Module):
-    def __init__(self, cin, cout, c_attr, c_id):
+    def __init__(self, cin, cout, c_attr, c_id, adaptive_norm=False):
         super(AAD_ResBlk, self).__init__()
         self.cin = cin
         self.cout = cout
 
-        self.AAD1 = AADLayer(cin, c_attr, c_id)
+        self.AAD1 = AADLayer(cin, c_attr, c_id, adaptive_norm=adaptive_norm)
         self.conv1 = nn.Conv2d(cin, cin, kernel_size=3, stride=1, padding=1, bias=False)
         self.relu1 = nn.ReLU(inplace=True)
 
-        self.AAD2 = AADLayer(cin, c_attr, c_id)
+        self.AAD2 = AADLayer(cin, c_attr, c_id, adaptive_norm=adaptive_norm)
         self.conv2 = nn.Conv2d(
             cin, cout, kernel_size=3, stride=1, padding=1, bias=False
         )
         self.relu2 = nn.ReLU(inplace=True)
 
         if cin != cout:
-            self.AAD3 = AADLayer(cin, c_attr, c_id)
+            self.AAD3 = AADLayer(cin, c_attr, c_id, adaptive_norm=adaptive_norm)
             self.conv3 = nn.Conv2d(
                 cin, cout, kernel_size=3, stride=1, padding=1, bias=False
             )

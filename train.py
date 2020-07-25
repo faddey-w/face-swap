@@ -1,3 +1,4 @@
+#! /usr/bin/env python
 import argparse
 from reface.data_lib import Dataset
 from reface.faceshifter.train_AEI import ModelManager, Trainer

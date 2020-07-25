@@ -10,6 +10,7 @@ echo export LANG=en_US.UTF-8 >> /home/ec2-user/.bashrc
 echo set -g utf8 on >> /home/ec2-user/.tmux.conf
 echo bind -n S-Left  previous-window >> /home/ec2-user/.tmux.conf
 echo bind -n S-Right  next-window >> /home/ec2-user/.tmux.conf
+echo set-option -g allow-rename off >> /home/ec2-user/.tmux.conf
 wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O install-conda.sh
 bash install-conda.sh -b -p /home/ec2-user/miniconda3
 sudo -u ec2-user /home/ec2-user/miniconda3/bin/conda init

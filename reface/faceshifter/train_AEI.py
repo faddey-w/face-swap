@@ -242,14 +242,17 @@ class Trainer:
                 self._visualize_train(img_source, img_target, img_result)
             if (self.it + 1) % self.cfg.TEST.VIS_PERIOD == 0:
                 self._visualize_test()
-            if self.it and self.it % self.cfg.TRAINING.CHECKPOINT_PERIOD == 0:
+            if (
+                self.it != self.start_it
+                and self.it % self.cfg.TRAINING.CHECKPOINT_PERIOD == 0
+            ):
                 ckpt_path = self.model_manager.save_checkpoint(
                     self.generator, self.discriminator, self.opt_g, self.opt_d, self.it
                 )
                 print("checkpoint:", ckpt_path)
-            if self.it and self.it % self.cfg.TEST.TEST_PERIOD == 0:
+            if self.it != self.start_it and self.it % self.cfg.TEST.TEST_PERIOD == 0:
                 self._test()
-            if self.it and self.it % self.cfg.TRAINING.LOG_PERIOD == 0:
+            if self.it != self.start_it and self.it % self.cfg.TRAINING.LOG_PERIOD == 0:
                 self._log_metrics()
 
     def _get_generator_losses(

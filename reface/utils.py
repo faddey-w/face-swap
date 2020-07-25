@@ -280,3 +280,5 @@ def get_norm_cls(name):
         return nn.BatchNorm2d
     if name == "instance":
         return nn.InstanceNorm2d
+    if name == "AdaIN":
+        return lambda c: nn.InstanceNorm2d(c, track_running_stats=True)

@@ -20,6 +20,7 @@ class Config:
 
     class GENERATOR:
         DIMS: list
+        AAD_USE_ADAPTIVE_NORM: bool
 
         LR: float
 
