@@ -199,24 +199,11 @@ class Trainer:
             img_source = data["images1"].to(env.device)
             img_target = data["images2"].to(env.device)
             same_person = data["same_person"].to(env.device)
+
+            # inference
             with torch.no_grad():
                 face_embed_orig = self.face_recognizer(img_source)
-
-            # train G
-            self.opt_g.zero_grad()
             img_result, target_attrs = self.generator(img_target, face_embed_orig)
-            losses_g = self._get_generator_losses(
-                face_embed_orig, img_target, target_attrs, img_result, same_person
-            )
-            self._metrics.log(
-                Loss_G_adv=float(losses_g["adv"]),
-                Loss_G_id=float(losses_g["id"]),
-                Loss_G_attr=float(losses_g["attr"]),
-                Loss_G_rec=float(losses_g["rec"]),
-                Loss_G=float(losses_g["total"]),
-            )
-            losses_g["total"].backward()
-            self.opt_g.step()
 
             # train D
             self.opt_d.zero_grad()
@@ -229,6 +216,21 @@ class Trainer:
 
             losses_d["total"].backward()
             self.opt_d.step()
+
+            # train G
+            self.opt_g.zero_grad()
+            losses_g = self._get_generator_losses(
+                face_embed_orig, img_target, target_attrs, img_result, same_person
+            )
+            self._metrics.log(
+                Loss_G_adv=float(losses_g["adv"]),
+                Loss_G_id=float(losses_g["id"]),
+                Loss_G_attr=float(losses_g["attr"]),
+                Loss_G_rec=float(losses_g["rec"]),
+                Loss_G=float(losses_g["total"]),
+            )
+            losses_g["total"].backward()
+            self.opt_g.step()
 
             self._metrics.log(time_step=time.time() - step_start_time)
 
