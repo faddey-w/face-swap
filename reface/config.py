@@ -39,6 +39,8 @@ class Config:
     class TRAINING:
         CHECKPOINT_PERIOD: int
         CHECKPOINTS_MAX_LAST: int
+        CHECKPOINTS_KEEP_PERIOD: int
+        OPT_STEP_PERIOD: int
         LOG_PERIOD: float
         VIS_PERIOD: int
         VIS_MAX_IMAGES: int

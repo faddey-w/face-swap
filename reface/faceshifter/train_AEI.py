@@ -8,6 +8,7 @@ import torchvision
 import numpy as np
 import os
 import tqdm
+import logging
 import itertools
 import threading
 import datetime
@@ -65,13 +66,20 @@ class ModelManager:
         torch.save(ckpt, ckpt_path)
 
         all_ckpts = self._list_checkpoint_paths()
-        for _, old_ckpt_path in all_ckpts[: -self.cfg.TRAINING.CHECKPOINTS_MAX_LAST]:
+        not_last_ckpts = all_ckpts[: -self.cfg.TRAINING.CHECKPOINTS_MAX_LAST]
+        prev_keep_i = 0
+        keep_period = self.cfg.TRAINING.CHECKPOINTS_KEEP_PERIOD
+        for old_ckpt_i, old_ckpt_path in not_last_ckpts:
+            if keep_period is not None:
+                if old_ckpt_i >= prev_keep_i + keep_period:
+                    prev_keep_i = old_ckpt_i
+                    continue
             os.remove(old_ckpt_path)
 
         return ckpt_path
 
     def load_from_checkpoint(
-        self, generator, discriminator, optimizer_g, optimizer_d, it=None
+        self, generator, discriminator=None, optimizer_g=None, optimizer_d=None, it=None
     ):
         if it is None:
             it, ckpt_path = self._list_checkpoint_paths()[-1]
@@ -79,10 +87,16 @@ class ModelManager:
             ckpt_path = next(p for i, p in self._list_checkpoint_paths() if i == it)
         ckpt = torch.load(ckpt_path, map_location=torch.device("cpu"))
         generator.load_state_dict(ckpt["generator"], strict=False)
-        discriminator.load_state_dict(ckpt["discriminator"], strict=False)
-        optimizer_g.load_state_dict(ckpt["optimizer_g"])
-        optimizer_d.load_state_dict(ckpt["optimizer_d"])
+        if discriminator is not None:
+            discriminator.load_state_dict(ckpt["discriminator"], strict=False)
+        if optimizer_g is not None:
+            optimizer_g.load_state_dict(ckpt["optimizer_g"])
+        if optimizer_d is not None:
+            optimizer_d.load_state_dict(ckpt["optimizer_d"])
         return it
+
+    def list_checkpoints(self):
+        return [i for i, p in self._list_checkpoint_paths()]
 
     @classmethod
     def create_model_dir(cls, cfg, model_dir, strict=True):
@@ -136,8 +150,8 @@ class Trainer:
                 if get_face_size(entry) >= min_face_size
             ]
 
-        print("train size:", len(train_dataset))
-        print("test size:", len(test_dataset))
+        _log.info("train size: %s", len(train_dataset))
+        _log.info("test size: %s", len(test_dataset))
         self.train_dataset = train_dataset
         self.test_dataset = test_dataset
         self.face_recognizer = FaceRecognizer()
@@ -146,7 +160,10 @@ class Trainer:
         )
         self.data_gen = iter(self.dataloader)
         self.dataloader_test = data_lib.build_data_loader(
-            self.test_dataset, self.cfg, for_training=False, num_workers=1
+            self.test_dataset,
+            self.cfg,
+            for_training=False,
+            num_workers=max(1, self.cfg.INPUT.LOADER.NUM_WORKERS),
         )
         self.data_gen_test = iter(self.dataloader_test)
 
@@ -164,21 +181,34 @@ class Trainer:
         else:
             self.model_manager.init_model(self.generator, self.discriminator)
             self.start_it = 0
+        self._visdom_addr = visdom_addr
+        self._writers_initialized = False
+
+    def _init_writers(self):
+        if self._writers_initialized:
+            return
         self._metrics = MetricsAccumulator("2.3f", self.start_it)
 
         self._summary_writer = SummaryWriter(
             self.model_manager.model_dir, flush_secs=30
         )
-        self._log_file = open(os.path.join(model_manager.model_dir, "log.txt"), "a")
+        self._log_file = open(
+            os.path.join(self.model_manager.model_dir, "log.txt"), "a"
+        )
         self._vis = visdom.Visdom(
-            visdom_addr[0],
-            port=visdom_addr[1],
+            self._visdom_addr[0],
+            port=self._visdom_addr[1],
             env=os.path.relpath(self.model_manager.model_dir, env.models_dir),
         )
+        self._writers_initialized = True
 
     def train(self):
+        self._init_writers()
         self.generator.train()
         self.discriminator.train()
+
+        step_period = self.cfg.TRAINING.OPT_STEP_PERIOD = 1
+        loss_coeff = torch.tensor(1. / step_period).to(env.device)
 
         self._metrics.log(data_failures=0)
 
@@ -206,7 +236,8 @@ class Trainer:
             img_result, target_attrs = self.generator(img_target, face_embed_orig)
 
             # train D
-            self.opt_d.zero_grad()
+            if self.it % step_period == 0:
+                self.opt_d.zero_grad()
             losses_d = self._get_discriminator_losses(img_target, img_result.detach())
             self._metrics.log(
                 Loss_D_fake=float(losses_d["fake"]),
@@ -214,11 +245,13 @@ class Trainer:
                 Loss_D=float(losses_d["total"]),
             )
 
-            losses_d["total"].backward()
-            self.opt_d.step()
+            losses_d["total"].backward(loss_coeff)
+            if self.it % step_period == 0:
+                self.opt_d.step()
 
             # train G
-            self.opt_g.zero_grad()
+            if self.it % step_period == 0:
+                self.opt_g.zero_grad()
             losses_g = self._get_generator_losses(
                 face_embed_orig, img_target, target_attrs, img_result, same_person
             )
@@ -229,8 +262,13 @@ class Trainer:
                 Loss_G_rec=float(losses_g["rec"]),
                 Loss_G=float(losses_g["total"]),
             )
-            losses_g["total"].backward()
-            self.opt_g.step()
+            for p in self.discriminator.parameters():
+                p.requires_grad = False
+            losses_g["total"].backward(loss_coeff)
+            for p in self.discriminator.parameters():
+                p.requires_grad = True
+            if self.it % step_period == 0:
+                self.opt_g.step()
 
             self._metrics.log(time_step=time.time() - step_start_time)
 
@@ -251,7 +289,7 @@ class Trainer:
                 ckpt_path = self.model_manager.save_checkpoint(
                     self.generator, self.discriminator, self.opt_g, self.opt_d, self.it
                 )
-                print("checkpoint:", ckpt_path)
+                _log.info("checkpoint: %s", ckpt_path)
             if self.it != self.start_it and self.it % self.cfg.TEST.TEST_PERIOD == 0:
                 self._test()
             if self.it != self.start_it and self.it % self.cfg.TRAINING.LOG_PERIOD == 0:
@@ -315,6 +353,8 @@ class Trainer:
         return dict(true=loss_d_true, fake=loss_d_fake, total=loss_d)
 
     def _test(self):
+        self.generator.eval()
+        self.discriminator.eval()
         for _ in tqdm.trange(self.cfg.TEST.N_TEST_BATCHES, desc="TEST"):
             data = next(self.data_gen_test)
             img_source = data["images1"].to(env.device)
@@ -339,6 +379,8 @@ class Trainer:
                     LossTest_D_true=float(losses_d["true"]),
                     LossTest_D=float(losses_d["total"]),
                 )
+        self.generator.train()
+        self.discriminator.train()
 
     def _visualize_train(self, img_source, img_target, img_result):
         self._vis.image(
@@ -350,16 +392,8 @@ class Trainer:
         )
 
     def _visualize_test(self):
-        data_test = next(self.data_gen_test)
-        img_source = data_test["images1"].to(env.device)
-        img_target = data_test["images2"].to(env.device)
-        with torch.no_grad():
-            face_embed_test = self.face_recognizer(img_source)
-            img_result_test, _ = self.generator(img_target, face_embed_test)
         self._vis.image(
-            self._make_visualization(
-                img_source, img_target, img_result_test, self.cfg.TEST.VIS_MAX_IMAGES
-            ),
+            self.get_demo("test", self.cfg.TEST.VIS_MAX_IMAGES),
             "AEI-test",
             opts=dict(caption="AEI-test"),
         )
@@ -375,7 +409,7 @@ class Trainer:
             f"{key}={valstr}" for key, valstr in metrics_formatted.items()
         )
         print(message, file=self._log_file, flush=True)
-        print(message)
+        _log.info(message)
 
     def _make_visualization(self, img_source, img_target, img_result, max_images=None):
         def get_grid_image(img):
@@ -392,6 +426,26 @@ class Trainer:
         vis_result = torch.cat((img_source, img_result, img_target), dim=2)
         vis_result = (vis_result + 1) / 2
         return vis_result
+
+    def get_demo(self, which_data, max_images):
+        if which_data == "train":
+            data = next(self.data_gen)
+        elif which_data == "test":
+            data = next(self.data_gen_test)
+        else:
+            raise ValueError(which_data)
+        img_source = data["images1"].to(env.device)
+        img_target = data["images2"].to(env.device)
+
+        self.generator.eval()
+        self.discriminator.eval()
+        with torch.no_grad():
+            face_embed = self.face_recognizer(img_source)
+            img_result, target_attrs = self.generator(img_target, face_embed)
+
+        self.generator.train()
+        self.discriminator.train()
+        return self._make_visualization(img_source, img_target, img_result, max_images)
 
 
 class MetricsAccumulator:
@@ -447,3 +501,6 @@ def hinge_loss(X, positive=True):
 
 def get_face_size(entry):
     return min(data_lib.box_xyxy_to_cxywh(entry["box"])[2:])
+
+
+_log = logging.getLogger(__name__)

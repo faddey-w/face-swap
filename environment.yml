@@ -26,3 +26,4 @@ dependencies:
       - visdom==0.1.8.9
       - facenet_pytorch==2.3.0
       - tensorflow==1.14  # we don't use it but tensorboard has issues without it
+      - streamlit==0.64.0

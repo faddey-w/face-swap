@@ -1,5 +1,6 @@
 #! /usr/bin/env python
 import argparse
+import logging
 from reface.data_lib import Dataset
 from reface.faceshifter.train_AEI import ModelManager, Trainer
 
@@ -8,6 +9,7 @@ def main():
     cli = argparse.ArgumentParser()
     cli.add_argument("model_dir")
     opts = cli.parse_args()
+    logging.basicConfig(level=logging.INFO)
     mmgr = ModelManager(opts.model_dir)
     ds_train = Dataset("train")
     ds_test = Dataset("test")
