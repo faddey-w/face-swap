@@ -12,6 +12,7 @@ def make_compatible_config(cfg: Config):
     )
     _default(cfg, "TRAINING.CHECKPOINTS_KEEP_PERIOD", None)
     _default(cfg, "TRAINING.OPT_STEP_PERIOD", 1)
+    _default(cfg, "TRAINING.INIT_CHECKPOINT", None)
 
 
 def _get_subcfg(cfg, path):

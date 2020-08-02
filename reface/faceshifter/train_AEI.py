@@ -79,12 +79,20 @@ class ModelManager:
         return ckpt_path
 
     def load_from_checkpoint(
-        self, generator, discriminator=None, optimizer_g=None, optimizer_d=None, it=None
+        self,
+        generator,
+        discriminator=None,
+        optimizer_g=None,
+        optimizer_d=None,
+        it=None,
+        ckpt_path=None,
     ):
-        if it is None:
-            it, ckpt_path = self._list_checkpoint_paths()[-1]
-        else:
+        if ckpt_path is not None:
+            assert it is None
+        elif it is not None:
             ckpt_path = next(p for i, p in self._list_checkpoint_paths() if i == it)
+        else:
+            it, ckpt_path = self._list_checkpoint_paths()[-1]
         ckpt = torch.load(ckpt_path, map_location=torch.device("cpu"))
         generator.load_state_dict(ckpt["generator"], strict=False)
         if discriminator is not None:
@@ -179,7 +187,14 @@ class Trainer:
                 self.generator, self.discriminator, self.opt_g, self.opt_d
             )
         else:
-            self.model_manager.init_model(self.generator, self.discriminator)
+            if self.cfg.TRAINING.INIT_CHECKPOINT is None:
+                self.model_manager.init_model(self.generator, self.discriminator)
+            else:
+                self.model_manager.load_from_checkpoint(
+                    self.generator,
+                    self.discriminator,
+                    ckpt_path=self.cfg.TRAINING.INIT_CHECKPOINT,
+                )
             self.start_it = 0
         self._visdom_addr = visdom_addr
         self._writers_initialized = False
@@ -208,7 +223,7 @@ class Trainer:
         self.discriminator.train()
 
         step_period = self.cfg.TRAINING.OPT_STEP_PERIOD = 1
-        loss_coeff = torch.tensor(1. / step_period).to(env.device)
+        loss_coeff = torch.tensor(1.0 / step_period).to(env.device)
 
         self._metrics.log(data_failures=0)
 

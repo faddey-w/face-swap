@@ -8,7 +8,7 @@ RANDOM_SEED: 1
 INPUT:
     FACE_BOX_EXTENSION_FACTOR: 1.4
     IMAGE_SIZE: 256
-    MIN_FACE_SIZE: 60
+    MIN_FACE_SIZE: 120
     N_CHANNELS: 3
     TRAIN:
         BATCH_SIZE: 8
@@ -19,7 +19,8 @@ GENERATOR:
     DIMS: [32, 64, 128, 256, 512, 1024, 1024]
     # DIMS: [32, 64, 128, 256, 512, 512] #, 1024]
     AAD_NORM: batch
-    LR: 0.0006
+    # LR: 0.0006
+    LR: 0.00004
 DISCRIMINATOR:
     LR: 0.0004
     CONV_SIZE: 4
@@ -38,6 +39,8 @@ TRAINING:
     LOG_PERIOD: 50
     VIS_PERIOD: 100
     VIS_MAX_IMAGES: 5
+    # INIT_CHECKPOINT: 
+    INIT_CHECKPOINT: .models/imsz256-60_bs8-2-1_G_L6e-04_full_D_L4e-04_lr6_sc3/model_0096000.ckpt
 TEST:
     VIS_PERIOD: 100
     VIS_MAX_IMAGES: 4
@@ -53,7 +56,7 @@ model_dir = (
     f"D_L{cfg.DISCRIMINATOR.LR:.0e}_"
     f"lr{cfg.DISCRIMINATOR.N_LAYERS}_"
     f"sc{cfg.DISCRIMINATOR.N_SCALES}"
-    # f"_ext-{cfg.INPUT.FACE_BOX_EXTENSION_FACTOR:.1f}"
+    "_finetune"
 )
 print(model_dir)
 ModelManager.create_model_dir(cfg, model_dir, strict=True)

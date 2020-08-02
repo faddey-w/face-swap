@@ -1,4 +1,4 @@
-from typing import List, Union
+from typing import List, Union, Optional
 
 
 class Config:
@@ -44,6 +44,8 @@ class Config:
         LOG_PERIOD: float
         VIS_PERIOD: int
         VIS_MAX_IMAGES: int
+
+        INIT_CHECKPOINT: Optional[str]
 
     class TEST:
         VIS_PERIOD: int

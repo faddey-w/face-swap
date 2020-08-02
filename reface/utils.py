@@ -205,7 +205,7 @@ def load_config_from_dict(dictionary) -> Config:
                     result = load_from_template(nest_template, value)
                     setattr(cfg_obj, key, result)
                 else:
-                    # it should be either raw value or a Union
+                    # it should be either raw type or a Union
                     anno = template.__annotations__[key]
                     if typing_utils.is_union(anno):
                         nest_templates = typing_utils.extract_generic(anno)
