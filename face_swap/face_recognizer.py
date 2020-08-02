@@ -1,5 +1,5 @@
 from torch import nn
-from reface import env
+from face_swap import env
 from facenet_pytorch import InceptionResnetV1
 
 

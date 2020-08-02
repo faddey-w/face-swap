@@ -3,7 +3,7 @@ import os
 import csv
 import hashlib
 import tqdm
-from reface.utils import map_unordered_fast, prefetch
+from face_swap.utils import map_unordered_fast, prefetch
 
 
 def main():

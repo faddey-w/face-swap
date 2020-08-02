@@ -10,8 +10,8 @@ import bisect
 import torch.utils.data
 import torch.nn
 from collections import defaultdict
-from reface.config import Config
-from reface import env, s3_utils
+from face_swap.config import Config
+from face_swap import env, s3_utils
 
 
 class Dataset:

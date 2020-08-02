@@ -1,4 +1,4 @@
-name: reface
+name: face_swap
 channels:
   - defaults
 dependencies:

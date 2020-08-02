@@ -1,9 +1,9 @@
 import json
 import os
-from reface import env
+from face_swap import env
 
 
-bucket = "data-for-refaceai-test"
+bucket = "data-for-face-swap"
 
 
 def get_s3_client():
@@ -12,7 +12,7 @@ def get_s3_client():
 
         try:
             creds = json.load(
-                open(os.path.join(env.repo_root, "reface/aws-creds.json"))
+                open(os.path.join(env.repo_root, "face_swap/aws-creds.json"))
             )
             s3client = boto3.client(
                 "s3",

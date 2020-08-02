@@ -5,7 +5,7 @@
 .ipynb_checkpoints
 compiled.ipynb
 .aqx.ini
-reface/aws-creds.json
+face_swap/aws-creds.json
 .data
 .models
 .local

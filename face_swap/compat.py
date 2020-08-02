@@ -1,4 +1,4 @@
-from reface.config import Config
+from face_swap.config import Config
 
 
 def make_compatible_config(cfg: Config):

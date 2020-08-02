@@ -1,9 +1,9 @@
 import os
 import streamlit as st
 import numpy as np
-from reface import env
-from reface.data_lib import Dataset
-from reface.faceshifter.train_AEI import ModelManager, Trainer
+from face_swap import env
+from face_swap.data_lib import Dataset
+from face_swap.faceshifter.train_AEI import ModelManager, Trainer
 
 
 env.device = "cpu"

@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from reface import utils, face_recognizer
-from reface.config import Config
+from face_swap import utils, face_recognizer
+from face_swap.config import Config
 from .AADLayer import AAD_ResBlk
 
 

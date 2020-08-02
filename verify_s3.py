@@ -3,7 +3,7 @@ import csv
 import tqdm
 from concurrent.futures.thread import ThreadPoolExecutor
 from queue import Queue
-from reface import s3_utils
+from face_swap import s3_utils
 
 
 def main():

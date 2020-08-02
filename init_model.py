@@ -1,6 +1,6 @@
 #! /usr/bin/env python
-from reface import utils
-from reface.faceshifter.train_AEI import ModelManager
+from face_swap import utils
+from face_swap.faceshifter.train_AEI import ModelManager
 
 # language=YAML
 cfg_text = """

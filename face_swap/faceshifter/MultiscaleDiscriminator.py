@@ -1,7 +1,7 @@
 import torch.nn as nn
 import numpy as np
-from reface import utils
-from reface.config import Config
+from face_swap import utils
+from face_swap.config import Config
 
 
 class NLayerDiscriminator(nn.Module):

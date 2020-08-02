@@ -8,7 +8,7 @@ from concurrent.futures.thread import ThreadPoolExecutor
 from concurrent.futures import Future
 from types import SimpleNamespace
 from dacite import types as typing_utils
-from reface.config import Config
+from face_swap.config import Config
 
 
 class Mapper:

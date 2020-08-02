@@ -1,7 +1,7 @@
-from reface.faceshifter.AEI_Net import AEI_Net
-from reface.faceshifter.MultiscaleDiscriminator import MultiscaleDiscriminator
+from face_swap.faceshifter.AEI_Net import AEI_Net
+from face_swap.faceshifter.MultiscaleDiscriminator import MultiscaleDiscriminator
 import torch.optim as optim
-from reface.face_recognizer import FaceRecognizer
+from face_swap.face_recognizer import FaceRecognizer
 import torch
 import time
 import torchvision
@@ -14,8 +14,8 @@ import threading
 import datetime
 import visdom
 from collections import defaultdict
-from reface import env, data_lib, utils, compat
-from reface.config import Config
+from face_swap import env, data_lib, utils, compat
+from face_swap.config import Config
 from torch.utils.tensorboard import SummaryWriter
 
 

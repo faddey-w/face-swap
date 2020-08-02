@@ -2,8 +2,8 @@ import os
 import argparse
 import tqdm
 import botocore.exceptions
-from reface.utils import map_unordered_fast, prefetch
-from reface import s3_utils
+from face_swap.utils import map_unordered_fast, prefetch
+from face_swap import s3_utils
 
 
 def iter_files(split_name):

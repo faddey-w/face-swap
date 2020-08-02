@@ -1,8 +1,8 @@
 #! /usr/bin/env python
 import argparse
 import logging
-from reface.data_lib import Dataset
-from reface.faceshifter.train_AEI import ModelManager, Trainer
+from face_swap.data_lib import Dataset
+from face_swap.faceshifter.train_AEI import ModelManager, Trainer
 
 
 def main():

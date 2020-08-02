@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from reface import utils
+from face_swap import utils
 
 
 class AADLayer(nn.Module):
