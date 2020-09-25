@@ -14,3 +14,5 @@ middle - result of inserting the source face into the target):
 Trained models are there: https://drive.google.com/drive/folders/1U6Tw8cC9YIZpA6XtoAnb0NecbXVP6xPI?usp=sharing
 
 Kudos to https://github.com/taotaonice/FaceShifter from which this work is derived. 
+
+P.S.: you need python 3.7 to run the code
